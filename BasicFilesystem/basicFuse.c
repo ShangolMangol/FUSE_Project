@@ -79,6 +79,17 @@ static int persistent_write(const char *path, const char *buf, size_t size, off_
     return res == -1 ? -errno : res;
 }
 
+static int persistent_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+    char fpath[PATH_MAX];
+    fullpath(fpath, path);
+
+    int res = truncate(fpath, size);
+    if (res == -1)
+        return -errno;
+
+    return 0;
+}
+
 static const struct fuse_operations persistent_oper = {
     .getattr = persistent_getattr,
     .readdir = persistent_readdir,
@@ -86,6 +97,7 @@ static const struct fuse_operations persistent_oper = {
     .read    = persistent_read,
     .write   = persistent_write,
     .create  = persistent_create,
+    .truncate 	= persistent_truncate
 };
 
 int main(int argc, char *argv[]) {
