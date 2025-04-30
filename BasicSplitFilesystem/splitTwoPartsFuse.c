@@ -45,6 +45,16 @@ static int str_ends_with(const char *str, const char *suffix) {
 // --- FUSE Operations ---
 static int splitfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
     (void) fi;
+
+    char fullpath[PATH_MAX];
+    snprintf(fullpath, PATH_MAX, "%s%s", backing_dir_abs, path);
+
+    // First: handle directories (or any unsplit files, like control files)
+    if (stat(fullpath, stbuf) == 0) {
+        return 0;  // Found actual file or directory
+    }
+
+    // Fallback: check for .part0 and .part1 (split files)
     char part0[PATH_MAX], part1[PATH_MAX];
     get_part_paths(path, part0, part1);
 
