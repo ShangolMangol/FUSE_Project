@@ -125,7 +125,7 @@ static int splitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 
 static int splitfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
-    char part0[PATH_MAX], char part1[PATH_MAX];
+    char part0[PATH_MAX], part1[PATH_MAX];
     get_part_paths(path, part0, part1);
 
     int fd = open(part0, fi->flags | O_CREAT, mode);
