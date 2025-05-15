@@ -42,6 +42,162 @@ static int str_ends_with(const char *str, const char *suffix) {
     return lenstr >= lensuffix && strcmp(str + lenstr - lensuffix, suffix) == 0;
 }
 
+// Utility function for copy-on-write operations
+static int copy_file_contents(const char *src_path, const char *dst_path) {
+    if (access(src_path, F_OK) != 0) {
+        // Source doesn't exist, create empty destination
+        int fd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd == -1) return -errno;
+        close(fd);
+        return 0;
+    }
+    
+    int fd_src = open(src_path, O_RDONLY);
+    if (fd_src == -1) return -errno;
+    
+    int fd_dst = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd_dst == -1) {
+        close(fd_src);
+        return -errno;
+    }
+    
+    char buffer[8192];
+    ssize_t bytes_read;
+    
+    while ((bytes_read = read(fd_src, buffer, sizeof(buffer))) > 0) {
+        if (write(fd_dst, buffer, bytes_read) != bytes_read) {
+            close(fd_src);
+            close(fd_dst);
+            unlink(dst_path);
+            return -errno;
+        }
+    }
+    
+    close(fd_src);
+    close(fd_dst);
+    
+    return 0;
+}
+
+// Merge two files into one temporary file
+static int merge_files(const char *part0, const char *part1, const char *merged_path) {
+    // Open or create the destination file
+    int fd_dst = open(merged_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd_dst == -1) return -errno;
+    
+    // Copy part0 if it exists
+    if (access(part0, F_OK) == 0) {
+        int fd_src = open(part0, O_RDONLY);
+        if (fd_src == -1) {
+            close(fd_dst);
+            return -errno;
+        }
+        
+        char buffer[8192];
+        ssize_t bytes_read;
+        
+        while ((bytes_read = read(fd_src, buffer, sizeof(buffer))) > 0) {
+            if (write(fd_dst, buffer, bytes_read) != bytes_read) {
+                close(fd_src);
+                close(fd_dst);
+                unlink(merged_path);
+                return -errno;
+            }
+        }
+        
+        close(fd_src);
+    }
+    
+    // Append part1 if it exists
+    if (access(part1, F_OK) == 0) {
+        int fd_src = open(part1, O_RDONLY);
+        if (fd_src == -1) {
+            close(fd_dst);
+            return -errno;
+        }
+        
+        char buffer[8192];
+        ssize_t bytes_read;
+        
+        while ((bytes_read = read(fd_src, buffer, sizeof(buffer))) > 0) {
+            if (write(fd_dst, buffer, bytes_read) != bytes_read) {
+                close(fd_src);
+                close(fd_dst);
+                unlink(merged_path);
+                return -errno;
+            }
+        }
+        
+        close(fd_src);
+    }
+    
+    close(fd_dst);
+    return 0;
+}
+
+// Split a file into two parts at the middle
+static int split_file(const char *merged_path, const char *part0, const char *part1) {
+    struct stat st;
+    if (stat(merged_path, &st) == -1) return -errno;
+    
+    off_t total_size = st.st_size;
+    off_t mid_point = total_size / 2;
+    if (total_size % 2 != 0) mid_point++; // if odd, slightly favor part0
+    
+    // Open the merged file
+    int fd_src = open(merged_path, O_RDONLY);
+    if (fd_src == -1) return -errno;
+    
+    // Create part0
+    int fd_dst0 = open(part0, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd_dst0 == -1) {
+        close(fd_src);
+        return -errno;
+    }
+    
+    // Copy first half to part0
+    char buffer[8192];
+    off_t bytes_copied = 0;
+    ssize_t bytes_read;
+    
+    while (bytes_copied < mid_point && (bytes_read = read(fd_src, buffer, 
+            (sizeof(buffer) < (mid_point - bytes_copied)) ? sizeof(buffer) : (mid_point - bytes_copied))) > 0) {
+        
+        if (write(fd_dst0, buffer, bytes_read) != bytes_read) {
+            close(fd_src);
+            close(fd_dst0);
+            unlink(part0);
+            return -errno;
+        }
+        
+        bytes_copied += bytes_read;
+    }
+    
+    close(fd_dst0);
+    
+    // Create part1
+    int fd_dst1 = open(part1, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd_dst1 == -1) {
+        close(fd_src);
+        return -errno;
+    }
+    
+    // Copy second half to part1
+    while ((bytes_read = read(fd_src, buffer, sizeof(buffer))) > 0) {
+        if (write(fd_dst1, buffer, bytes_read) != bytes_read) {
+            close(fd_src);
+            close(fd_dst1);
+            unlink(part1);
+            return -errno;
+        }
+    }
+    
+    close(fd_src);
+    close(fd_dst1);
+    
+    return 0;
+}
+
 // --- FUSE Operations ---
 static int splitfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
     (void) fi;
@@ -137,19 +293,41 @@ static int splitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int splitfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     char part0[PATH_MAX], part1[PATH_MAX];
     get_part_paths(path, part0, part1);
-
-    int fd = open(part0, fi->flags | O_CREAT, mode);
-    if (fd == -1) return -errno;
     
-    // Create part1 as well, even if not used yet
-    int fd1 = open(part1, fi->flags | O_CREAT, mode);
-    if (fd1 == -1) {
-        close(fd);
+    char temp_merged[PATH_MAX], temp0[PATH_MAX], temp1[PATH_MAX];
+    snprintf(temp_merged, PATH_MAX, "%s%s.merged.tmp", backing_dir_abs, path);
+    snprintf(temp0, PATH_MAX, "%s%s.part0.tmp", backing_dir_abs, path);
+    snprintf(temp1, PATH_MAX, "%s%s.part1.tmp", backing_dir_abs, path);
+
+    // Create a temporary merged file
+    int fd = open(temp_merged, fi->flags | O_CREAT, mode);
+    if (fd == -1) return -errno;
+    close(fd);
+    
+    // Split the (empty) merged file into two parts
+    int res = split_file(temp_merged, temp0, temp1);
+    unlink(temp_merged); // Clean up merged file
+    
+    if (res < 0) {
+        return res;
+    }
+    
+    // Atomically rename temporary files to their final destinations
+    if (rename(temp0, part0) == -1) {
+        unlink(temp0);
+        unlink(temp1);
         return -errno;
     }
-    close(fd1);
     
+    if (rename(temp1, part1) == -1) {
+        unlink(temp1);
+        return -errno;
+    }
 
+    // We still need to open the file for the caller
+    fd = open(part0, fi->flags, mode);
+    if (fd == -1) return -errno;
+    
     fi->fh = fd;
     return 0;
 }
@@ -206,75 +384,113 @@ static int splitfs_write(const char *path, const char *buf, size_t size, off_t o
     snprintf(fpath0, PATH_MAX, "%s%s.part0", backing_dir_abs, path);
     snprintf(fpath1, PATH_MAX, "%s%s.part1", backing_dir_abs, path);
 
-    struct stat st;
-    if (stat(fpath0, &st) == -1) return -errno;
-    off_t split_point = st.st_size;   // split_point = size0
+    char temp0[PATH_MAX], temp1[PATH_MAX], temp_merged[PATH_MAX];
+    snprintf(temp0, PATH_MAX, "%s%s.part0.tmp", backing_dir_abs, path);
+    snprintf(temp1, PATH_MAX, "%s%s.part1.tmp", backing_dir_abs, path);
+    snprintf(temp_merged, PATH_MAX, "%s%s.merged.tmp", backing_dir_abs, path);
 
-    int fd;
-    ssize_t res;
-
-    // Check if the offset is within the first part or if the first part is empty
-    // If offset < split_point, write to part0; else write to part1
-    if (offset < split_point || split_point == 0) {
-        fd = open(fpath0, O_WRONLY);
-        if (fd == -1) return -errno;
-        res = pwrite(fd, buf, size, offset);
-        close(fd);
-        if (res == -1) return -errno;
-    } else {
-        fd = open(fpath1, O_WRONLY | O_CREAT, 0644);
-        if (fd == -1) return -errno;
-        res = pwrite(fd, buf, size, offset - split_point);
-        close(fd);
-        if (res == -1) return -errno;
+    // Merge the two parts into a single temporary file
+    int res = merge_files(fpath0, fpath1, temp_merged);
+    if (res < 0) return res;
+    
+    // Write to the merged file
+    int fd = open(temp_merged, O_WRONLY);
+    if (fd == -1) {
+        unlink(temp_merged);
+        return -errno;
+    }
+    
+    ssize_t write_res = pwrite(fd, buf, size, offset);
+    close(fd);
+    
+    if (write_res == -1) {
+        unlink(temp_merged);
+        return -errno;
+    }
+    
+    // Split the merged file back into two parts
+    res = split_file(temp_merged, temp0, temp1);
+    unlink(temp_merged); // Clean up merged file
+    
+    if (res < 0) {
+        return res;
+    }
+    
+    // Atomic rename to replace original files
+    if (rename(temp0, fpath0) == -1) {
+        unlink(temp0);
+        unlink(temp1);
+        return -errno;
+    }
+    
+    if (rename(temp1, fpath1) == -1) {
+        unlink(temp1);
+        return -errno;
     }
 
-    return res;
+    return write_res;
 }
-
 
 static int splitfs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+    (void) fi; // fi is not used as we operate directly on backing files.
+
     char fpath0[PATH_MAX], fpath1[PATH_MAX];
-    snprintf(fpath0, PATH_MAX, "%s%s.part0", backing_dir_abs, path);
-    snprintf(fpath1, PATH_MAX, "%s%s.part1", backing_dir_abs, path);
+    get_part_paths(path, fpath0, fpath1);
+    
+    char temp0[PATH_MAX], temp1[PATH_MAX], temp_merged[PATH_MAX];
+    snprintf(temp0, PATH_MAX, "%s%s.part0.tmp", backing_dir_abs, path);
+    snprintf(temp1, PATH_MAX, "%s%s.part1.tmp", backing_dir_abs, path);
+    snprintf(temp_merged, PATH_MAX, "%s%s.merged.tmp", backing_dir_abs, path);
 
-    struct stat st0, st1;
-    if (stat(fpath0, &st0) == -1) return -errno;
-    if (stat(fpath1, &st1) == -1) return -errno;
-
-    off_t size0 = st0.st_size;
-    off_t size1 = st1.st_size;
-
-    off_t total_size = size0 + size1;
-    off_t split_point = size / 2 + (size % 2 != 0); // logical split point
-
-    // If truncating below the split point, adjust only part0
-    if (size < size0) {
-        if (truncate(fpath0, split_point) == -1) return -errno;
-        if (truncate(fpath1, 0) == -1) return -errno;
+    // Merge the two parts into a single temporary file
+    int res = merge_files(fpath0, fpath1, temp_merged);
+    if (res < 0) return res;
+    
+    // Truncate the merged file
+    res = truncate(temp_merged, size);
+    if (res < 0) {
+        unlink(temp_merged);
+        return -errno;
     }
-    // If truncating between parts, adjust both parts accordingly
-    else if (size < total_size) {
-        if (truncate(fpath0, split_point) == -1) return -errno;
-        if (truncate(fpath1, size - split_point) == -1) return -errno;
+    
+    // Split the merged file back into two parts
+    res = split_file(temp_merged, temp0, temp1);
+    unlink(temp_merged); // Clean up merged file
+    
+    if (res < 0) {
+        return res;
     }
-    // If truncating beyond both parts, extend both parts
-    else {
-        // Extend part0
-        if (truncate(fpath0, split_point) == -1) return -errno;
-        // Extend part1
-        if (truncate(fpath1, size - split_point) == -1) return -errno;
+    
+    // Atomic rename to replace original files
+    if (rename(temp0, fpath0) == -1) {
+        unlink(temp0);
+        unlink(temp1);
+        return -errno;
+    }
+    
+    if (rename(temp1, fpath1) == -1) {
+        unlink(temp1);
+        return -errno;
     }
 
-    return 0;
+    return 0; // Success
 }
-
 
 static int splitfs_unlink(const char *path) {
     char part0[PATH_MAX], part1[PATH_MAX];
     get_part_paths(path, part0, part1);
-    unlink(part0);
-    unlink(part1);
+    
+    int res0 = unlink(part0);
+    int res1 = unlink(part1);
+    
+    // If both failed, return error from part0 (most likely to exist)
+    if (res0 == -1 && res1 == -1) {
+        // Only return error if at least one of the parts should have existed
+        if (access(part0, F_OK) == 0 || access(part1, F_OK) == 0) {
+            return -errno;
+        }
+    }
+    
     return 0;
 }
 
