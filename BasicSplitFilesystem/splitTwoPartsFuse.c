@@ -509,6 +509,21 @@ static int splitfs_rmdir(const char *path) {
 static int splitfs_rename(const char *from, const char *to, unsigned int flags) {
     if (flags) return -EINVAL;
 
+    char from_path[PATH_MAX], to_path[PATH_MAX];
+    fullpath(from_path, from);
+    fullpath(to_path, to);
+
+    // First check if it's a directory (handle directly)
+    struct stat st;
+    if (stat(from_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        // It's a directory, rename directly
+        if (rename(from_path, to_path) == -1) {
+            return -errno;
+        }
+        return 0;
+    }
+
+    // Not a directory, handle as a file which might be split
     char from0[PATH_MAX], from1[PATH_MAX], to0[PATH_MAX], to1[PATH_MAX];
     get_part_paths(from, from0, from1);
     get_part_paths(to, to0, to1);
