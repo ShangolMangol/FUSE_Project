@@ -4,6 +4,9 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <cstring>
+
+
 
 
 std::map<Range, std::pair<Range, CriticalType>>& AbstractFileHandler::getFileMap() {
@@ -104,17 +107,36 @@ ResultCode AbstractFileHandler::saveMapToFile(const char* mappingPath) {
     return ResultCode::SUCCESS;
 }
 
-/**
- * 
- * THIS IS WRONG, IT NEEDS TO READ FROM THE CRITICAL AND NON-CRITICAL FILES
- * 
- */
 ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, size_t size, off_t offset) {
-     std::memset(buffer, 0, size);  // zero-initialize the buffer
 
-    int fd = open(mappingPath, O_RDONLY);
-    if (fd < 0) {
-        std::perror("Failed to open data file for reading");
+    // Load the mapping
+    if (loadMapFromFile(mappingPath) != ResultCode::SUCCESS) {
+        std::cerr << "Failed to load file map from: " << mappingPath << std::endl;
+        return ResultCode::FAILURE;
+    }
+
+    std::memset(buffer, 0, size);  // zero-initialize output buffer
+
+    // Derive base path by removing ".mapping" suffix
+    std::string basePath(mappingPath);
+    const std::string mappingSuffix = ".mapping";
+    if (basePath.size() <= mappingSuffix.size() || basePath.substr(basePath.size() - mappingSuffix.size()) != mappingSuffix) {
+        std::cerr << "Invalid mappingPath: missing .mapping suffix\n";
+        return ResultCode::FAILURE;
+    }
+    basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
+
+    // Create paths for critical and non-critical data
+    std::string criticalPath = basePath + ".crit";
+    std::string nonCriticalPath = basePath + ".noncrit";
+
+    int fdCrit = open(criticalPath.c_str(), O_RDONLY);
+    int fdNonCrit = open(nonCriticalPath.c_str(), O_RDONLY);
+
+    if (fdCrit < 0 || fdNonCrit < 0) {
+        std::perror("Failed to open critical or non-critical data file");
+        if (fdCrit >= 0) close(fdCrit);
+        if (fdNonCrit >= 0) close(fdNonCrit);
         return ResultCode::FAILURE;
     }
 
@@ -122,13 +144,14 @@ ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, 
 
     for (const auto& [originalRange, mappedPair] : fileMap) {
         const Range& mappedRange = mappedPair.first;
+        CriticalType type = mappedPair.second;
 
-        // Skip if the requested range [offset, readEnd] does not intersect with originalRange
+        // Skip if not overlapping with read range
         if (readEnd < originalRange.getStart() || offset > originalRange.getEnd()) {
             continue;
         }
 
-        // Compute overlap
+        // Calculate overlap
         int overlapStart = std::max(static_cast<int>(offset), originalRange.getStart());
         int overlapEnd = std::min(static_cast<int>(readEnd), originalRange.getEnd());
         size_t bytesToRead = overlapEnd - overlapStart + 1;
@@ -136,29 +159,120 @@ ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, 
         size_t bufferOffset = overlapStart - offset;
         off_t mappedOffset = mappedRange.getStart() + (overlapStart - originalRange.getStart());
 
+        int fd = (type == CriticalType::CRITICAL_DATA) ? fdCrit : fdNonCrit;
+
         if (lseek(fd, mappedOffset, SEEK_SET) < 0) {
             std::perror("lseek failed");
-            close(fd);
+            close(fdCrit);
+            close(fdNonCrit);
             return ResultCode::FAILURE;
         }
 
         ssize_t bytesRead = read(fd, buffer + bufferOffset, bytesToRead);
         if (bytesRead != static_cast<ssize_t>(bytesToRead)) {
             std::perror("read failed");
-            close(fd);
+            close(fdCrit);
+            close(fdNonCrit);
             return ResultCode::FAILURE;
         }
     }
 
-    close(fd);
+    close(fdCrit);
+    close(fdNonCrit);
     return ResultCode::SUCCESS;
 }
 
+// ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
+
+//     // if mapping already exists, load mapping file, then merge it, write to it, and call analyzeCriticalAreas(mergedFileBuffer, totalSize)
+//     // else, createMapping(buffer, size);
+
+//     // after creating the mapping, save the mapping to the file
+//     // saveMapToFile(mappingPath);
+// }
+
 ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
+    // Derive base path
+    std::string basePath(mappingPath);
+    const std::string mappingSuffix = ".mapping";
+    if (basePath.size() <= mappingSuffix.size() || basePath.substr(basePath.size() - mappingSuffix.size()) != mappingSuffix) {
+        std::cerr << "Invalid mappingPath: missing .mapping suffix\n";
+        return ResultCode::FAILURE;
+    }
+    basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
 
-    // if mapping already exists, load mapping file, then merge it, write to it, and call analyzeCriticalAreas(mergedFileBuffer, totalSize)
-    // else, createMapping(buffer, size);
+    std::string critPath = basePath + ".crit";
+    std::string noncritPath = basePath + ".noncrit";
 
-    // after creating the mapping, save the mapping to the file
-    // saveMapToFile(mappingPath);
+    bool mappingExists = std::ifstream(mappingPath).good();
+    std::vector<char> mergedBuffer;
+
+    if (mappingExists) {
+        // Load existing mapping
+        if (loadMapFromFile(mappingPath) != ResultCode::SUCCESS) {
+            std::cerr << "Failed to load existing mapping\n";
+            return ResultCode::FAILURE;
+        }
+
+        // Reconstruct full logical file
+        int totalSize = 0;
+        for (const auto& [range, _] : fileMap) {
+            totalSize = std::max(totalSize, range.getEnd() + 1);
+        }
+        mergedBuffer.resize(totalSize, 0);
+
+        if (readFile(mappingPath, mergedBuffer.data(), totalSize, 0) != ResultCode::SUCCESS) {
+            std::cerr << "Failed to reconstruct existing data\n";
+            return ResultCode::FAILURE;
+        }
+
+        // Merge new buffer
+        if (offset + size > mergedBuffer.size()) {
+            mergedBuffer.resize(offset + size, 0);
+        }
+        std::memcpy(mergedBuffer.data() + offset, buffer, size);
+    } else {
+        // New mapping
+        mergedBuffer.resize(offset + size, 0);
+        std::memcpy(mergedBuffer.data() + offset, buffer, size);
+    }
+
+    // Re-analyze and split into critical/non-critical data
+    critData.clear(); // Clear existing map for regeneration
+    noncritData.clear();
+    fileMap.clear();  
+
+    if (createMapping(mergedBuffer.data(), mergedBuffer.size()) != ResultCode::SUCCESS) {
+        std::cerr << "Critical analysis failed\n";
+        return ResultCode::FAILURE;
+    }
+
+    // Write critical data
+    {
+        std::ofstream critFile(critPath, std::ios::binary | std::ios::trunc);
+        if (!critFile.is_open()) {
+            std::cerr << "Failed to open .crit file for writing\n";
+            return ResultCode::FAILURE;
+        }
+        critFile.write(critData.data(), critData.size());
+    }
+
+    // Write non-critical data
+    {
+        std::ofstream noncritFile(noncritPath, std::ios::binary | std::ios::trunc);
+        if (!noncritFile.is_open()) {
+            std::cerr << "Failed to open .noncrit file for writing\n";
+            return ResultCode::FAILURE;
+        }
+        noncritFile.write(noncritData.data(), noncritData.size());
+    }
+
+    // Save updated mapping
+    if (saveMapToFile(mappingPath) != ResultCode::SUCCESS) {
+        std::cerr << "Failed to save mapping file\n";
+        return ResultCode::FAILURE;
+    }
+
+    return ResultCode::SUCCESS;
 }
+

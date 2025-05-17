@@ -5,6 +5,7 @@
 #include <string>
 #include <map>
 #include <utility>
+#include <vector>
 #include "../Utilities/Range.h"
 
 enum class CriticalType {
@@ -20,6 +21,8 @@ enum class ResultCode {
 class AbstractFileHandler {
 private:
     std::map<Range, std::pair<Range, CriticalType>> fileMap; // map of file ranges to critical types
+    std::vector<char> critData; // buffer for critical data
+    std::vector<char> noncritData; // buffer for non-critical data
 
 public:
     AbstractFileHandler() = default; // default constructor
@@ -84,12 +87,22 @@ public:
      * @brief Create a Mapping for critical data and non-critical data in the file, saved in the map object.
      * 
      * IMPORTANT: This function is virtual and should be implemented in the derived classes.
+     * Also changes fileMap, critData, and noncritData.
      * 
      * @param buffer the buffer to create the mapping from, containing the whole file content
      * @param size the size of the buffer
      * @return ResultCode SUCCESS if successful, FAILURE otherwise
      */
     virtual ResultCode createMapping(const char* buffer, size_t size) = 0; 
+
+    /**
+     * @brief Reads the entire file into the buffer.
+     * 
+     * @param mappingPath the path to the mapping file
+     * @param buffer buffer to read into
+     * @return ResultCode SUCCESS if successful, FAILURE otherwise
+     */
+    ResultCode readFullFile(const char* mappingPath, char* buffer); 
 
     
 };
