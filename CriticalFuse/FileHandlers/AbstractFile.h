@@ -21,8 +21,7 @@ enum class ResultCode {
 class AbstractFileHandler {
 private:
     std::map<Range, std::pair<Range, CriticalType>> fileMap; // map of file ranges to critical types
-    std::vector<char> critData; // buffer for critical data
-    std::vector<char> noncritData; // buffer for non-critical data
+    
 
 public:
     AbstractFileHandler() = default; // default constructor

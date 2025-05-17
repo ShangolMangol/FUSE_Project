@@ -240,13 +240,25 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
     }
 
     // Re-analyze and split into critical/non-critical data
-    critData.clear(); // Clear existing map for regeneration
-    noncritData.clear();
-    fileMap.clear();  
+    fileMap.clear(); // Clear existing map for regeneration
+    std::vector<char> critData; // buffer for critical data
+    std::vector<char> noncritData; // buffer for non-critical data
 
     if (createMapping(mergedBuffer.data(), mergedBuffer.size()) != ResultCode::SUCCESS) {
         std::cerr << "Critical analysis failed\n";
         return ResultCode::FAILURE;
+    }
+
+    // fill in the critical and non-critical data vectors
+    for (const auto& [range, mappedPair] : fileMap) {
+        const Range& mappedRange = mappedPair.first;
+        CriticalType type = mappedPair.second;
+
+        if (type == CriticalType::CRITICAL_DATA) {
+            critData.insert(critData.end(), mergedBuffer.begin() + range.getStart(), mergedBuffer.begin() + range.getEnd() + 1);
+        } else {
+            noncritData.insert(noncritData.end(), mergedBuffer.begin() + range.getStart(), mergedBuffer.begin() + range.getEnd() + 1);
+        }
     }
 
     // Write critical data
