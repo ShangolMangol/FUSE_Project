@@ -15,10 +15,10 @@ int main() {
     // Create a TextFileHandler instance
     TextFileHandler handler;
 
-    // Test mapping file path
+    // Test - mapping file path
     const char* mappingPath = "test.txt.mapping";
 
-    // Test data
+    // Test - text file data
     const char* testData = "Hello, this is a test file with some content that will be split into critical and non-critical data.";
     size_t dataSize = strlen(testData);
 

@@ -12,4 +12,4 @@ class TextFileHandler : public AbstractFileHandler {
         ResultCode createMapping(const char* buffer, size_t size) override;
 };
 
-
+#endif // TEXT_FILE_HANDLERS_HPP
