@@ -5,6 +5,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <cstring>
+#include <fcntl.h>      // For open
+#include <unistd.h>     // For close, read, lseek
+#include <sys/types.h>  // For off_t, ssize_t
 
 
 
@@ -108,7 +111,6 @@ ResultCode AbstractFileHandler::saveMapToFile(const char* mappingPath) {
 }
 
 ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, size_t size, off_t offset) {
-
     // Load the mapping
     if (loadMapFromFile(mappingPath) != ResultCode::SUCCESS) {
         std::cerr << "Failed to load file map from: " << mappingPath << std::endl;
@@ -208,7 +210,7 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
     std::vector<char> mergedBuffer;
 
     if (mappingExists) {
-        // Load existing mapping
+        // Load existing mapping (mappingfile -> std::map)
         if (loadMapFromFile(mappingPath) != ResultCode::SUCCESS) {
             std::cerr << "Failed to load existing mapping\n";
             return ResultCode::FAILURE;

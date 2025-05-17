@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -I.
-LDFLAGS = 
+LDFLAGS = -pthread
 
 # Source files
 SRCS = main.cpp \

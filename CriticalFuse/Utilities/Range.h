@@ -9,6 +9,7 @@ private:
     int endIdx;
 
 public:
+    Range() : startIdx(0), endIdx(0) {} // Default constructor
     Range(int start, int end);
     Range(const Range& other); // Copy constructor
     ~Range() = default; // Destructor
