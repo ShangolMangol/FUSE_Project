@@ -143,6 +143,7 @@ ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, 
     }
 
     off_t readEnd = offset + size - 1;
+    bool readSuccess = true;
 
     for (const auto& [originalRange, mappedPair] : fileMap) {
         const Range& mappedRange = mappedPair.first;
@@ -154,34 +155,39 @@ ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, 
         }
 
         // Calculate overlap
+        // we want to read [overlapStart, overlapEnd] from the orignal range 
         int overlapStart = std::max(static_cast<int>(offset), originalRange.getStart());
         int overlapEnd = std::min(static_cast<int>(readEnd), originalRange.getEnd());
         size_t bytesToRead = overlapEnd - overlapStart + 1;
 
         size_t bufferOffset = overlapStart - offset;
-        off_t mappedOffset = mappedRange.getStart() + (overlapStart - originalRange.getStart());
+        off_t mappedOffset = mappedRange.getStart() + std::max(0, overlapStart - originalRange.getStart());
 
         int fd = (type == CriticalType::CRITICAL_DATA) ? fdCrit : fdNonCrit;
 
         if (lseek(fd, mappedOffset, SEEK_SET) < 0) {
             std::perror("lseek failed");
-            close(fdCrit);
-            close(fdNonCrit);
-            return ResultCode::FAILURE;
+            readSuccess = false;
+            break;
         }
 
         ssize_t bytesRead = read(fd, buffer + bufferOffset, bytesToRead);
-        if (bytesRead != static_cast<ssize_t>(bytesToRead)) {
+        if (bytesRead < 0) {
             std::perror("read failed");
-            close(fdCrit);
-            close(fdNonCrit);
-            return ResultCode::FAILURE;
+            readSuccess = false;
+            break;
+        }
+        if (static_cast<size_t>(bytesRead) != bytesToRead) {
+            std::cerr << "Incomplete read: expected " << bytesToRead << " bytes, got " << bytesRead << std::endl;
+            readSuccess = false;
+            break;
         }
     }
 
     close(fdCrit);
     close(fdNonCrit);
-    return ResultCode::SUCCESS;
+
+    return readSuccess ? ResultCode::SUCCESS : ResultCode::FAILURE;
 }
 
 // ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
