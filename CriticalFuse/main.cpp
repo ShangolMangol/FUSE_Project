@@ -14,12 +14,13 @@ void printBuffer(const char* buffer, size_t size) {
 int main() {
     // Create a TextFileHandler instance
     TextFileHandler handler;
-
+ 
     // Test - mapping file path
     const char* mappingPath = "test.txt.mapping";
 
     // Test - text file data
-    const char* testData = "Hello, this is a test file with some content that will be split into critical and non-critical data.";
+    // const char* testData = "Hello, this is a test file with some content that will be split into critical and non-critical data.";
+    const char* testData ="";
     size_t dataSize = strlen(testData);
 
     std::cout << "Original data: " << testData << std::endl;

@@ -190,15 +190,6 @@ ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, 
     return readSuccess ? ResultCode::SUCCESS : ResultCode::FAILURE;
 }
 
-// ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
-
-//     // if mapping already exists, load mapping file, then merge it, write to it, and call analyzeCriticalAreas(mergedFileBuffer, totalSize)
-//     // else, createMapping(buffer, size);
-
-//     // after creating the mapping, save the mapping to the file
-//     // saveMapToFile(mappingPath);
-// }
-
 ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
     // Derive base path
     std::string basePath(mappingPath);
