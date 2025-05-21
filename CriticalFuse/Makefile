@@ -2,17 +2,21 @@ CXX = g++
 CXXFLAGS = -std=c++17 -I. -D_FILE_OFFSET_BITS=64 `pkg-config fuse3 --cflags`
 LDFLAGS = -pthread `pkg-config fuse3 --libs`
 
-# Source files
-SRCS = main.cpp \
-       FileHandlers/TextFile.cpp \
-       FileHandlers/AbstractFile.cpp \
-       Utilities/Range.cpp \
-       FUSE/CriticalFUSE.cpp
+# Common source files
+COMMON_SRCS = \
+    FileHandlers/TextFile.cpp \
+    FileHandlers/AbstractFile.cpp \
+    Utilities/Range.cpp
+
+# Target-specific sources
+HANDLER_SRCS = main.cpp $(COMMON_SRCS)
+FUSE_SRCS = FUSE/CriticalFUSE.cpp $(COMMON_SRCS)
 
 # Object files
-OBJS = $(SRCS:.cpp=.o)
+HANDLER_OBJS = $(HANDLER_SRCS:.cpp=.o)
+FUSE_OBJS = $(FUSE_SRCS:.cpp=.o)
 
-# Executable names
+# Executables
 TARGET = HandlerTest
 FUSE_TARGET = CriticalFUSE
 
@@ -20,19 +24,19 @@ FUSE_TARGET = CriticalFUSE
 all: $(TARGET) $(FUSE_TARGET)
 
 # Linking
-$(TARGET): $(filter-out FUSE/CriticalFUSE.o,$(OBJS))
-	$(CXX) $(filter-out FUSE/CriticalFUSE.o,$(OBJS)) -o $(TARGET) $(LDFLAGS)
+$(TARGET): $(HANDLER_OBJS)
+	$(CXX) $(HANDLER_OBJS) -o $@ $(LDFLAGS)
 
-$(FUSE_TARGET): FUSE/CriticalFUSE.o $(filter-out FUSE/CriticalFUSE.o,$(OBJS))
-	$(CXX) FUSE/CriticalFUSE.o $(filter-out FUSE/CriticalFUSE.o,$(OBJS)) -o $(FUSE_TARGET) $(LDFLAGS)
+$(FUSE_TARGET): $(FUSE_OBJS)
+	$(CXX) $(FUSE_OBJS) -o $@ $(LDFLAGS)
 
-# Compilation
+# Compilation rule
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Clean
 clean:
-	rm -f $(OBJS) $(TARGET) $(FUSE_TARGET)
+	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET)
 
 # Run
 run: $(TARGET)
@@ -41,4 +45,4 @@ run: $(TARGET)
 run_fuse: $(FUSE_TARGET)
 	./$(FUSE_TARGET) -f mnt
 
-.PHONY: all clean run run_fuse 
+.PHONY: all clean run run_fuse
