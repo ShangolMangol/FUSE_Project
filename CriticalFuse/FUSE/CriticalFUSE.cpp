@@ -309,16 +309,35 @@ static int criticalfs_rename(const char *from, const char *to, unsigned int flag
 }
 
 static const struct fuse_operations criticalfs_oper = {
-    .getattr = criticalfs_getattr,
-    .readdir = criticalfs_readdir,
-    .open = criticalfs_open,
-    .create = criticalfs_create,
-    .read = criticalfs_read,
-    .write = criticalfs_write,
-    .unlink = criticalfs_unlink,
-    .mkdir = criticalfs_mkdir,
-    .rmdir = criticalfs_rmdir,
-    .rename = criticalfs_rename,
+    .getattr     = criticalfs_getattr,
+    // .readlink    = ...,
+    // .mknod       = ...,
+    .mkdir       = criticalfs_mkdir,
+    .unlink      = criticalfs_unlink,
+    .rmdir       = criticalfs_rmdir,
+    // .symlink     = ...,
+    .rename      = criticalfs_rename,
+    // .link        = ...,
+    // .chmod       = ...,
+    // .chown       = ...,
+    // .truncate    = ...,
+    .open        = criticalfs_open,
+    .read        = criticalfs_read,
+    .write       = criticalfs_write,
+    // .statfs      = ...,
+    // .flush       = ...,
+    .release     = criticalfs_release, // Added release to match open
+    // .fsync       = ...,
+    // ... xattr functions ...
+    // .opendir     = ...,
+    .readdir     = criticalfs_readdir,
+    // .releasedir  = ...,
+    // .fsyncdir    = ...,
+    // .init        = ...,
+    // .destroy     = ...,
+    // .access      = ...,
+    .create      = criticalfs_create,
+    // ... other fields ...
 };
 
 int main(int argc, char *argv[]) {
