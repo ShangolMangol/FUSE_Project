@@ -16,9 +16,9 @@
 #include <map>
 #include <iostream>
 
-#include "FileHandlers/AbstractFile.h"
-#include "FileHandlers/TextFile.h"
-#include "FileHandlers/RawFile.h"
+#include "../FileHandlers/AbstractFile.h"
+#include "../FileHandlers/TextFile.h"
+#include "../FileHandlers/RawFile.h"
 
 #define BACKING_DIR_REL "./storage"
 static char backing_dir_abs[PATH_MAX];
@@ -53,7 +53,7 @@ static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
             return std::make_unique<TextFileHandler>();
         }
         // Add more handlers here as needed
-        // return std::make_unique<RawFileHandler>();
+        return std::make_unique<RawFileHandler>();
     }
     
     // Unsupported file type, treat as regular file
@@ -114,8 +114,8 @@ static int criticalfs_readdir(const char *path, void *buf, fuse_fill_dir_t fille
         return -errno;
     }
 
-    filler(buf, ".", NULL, 0, 0);
-    filler(buf, "..", NULL, 0, 0);
+    filler(buf, ".", NULL, 0, (fuse_fill_dir_flags)0);
+    filler(buf, "..", NULL, 0, (fuse_fill_dir_flags)0);
 
     struct dirent *de;
     while ((de = readdir(dp)) != NULL) {
@@ -132,7 +132,7 @@ static int criticalfs_readdir(const char *path, void *buf, fuse_fill_dir_t fille
         st.st_ino = de->d_ino;
         st.st_mode = de->d_type << 12;
         
-        if (filler(buf, name, &st, 0, 0)) {
+        if (filler(buf, name, &st, 0, (fuse_fill_dir_flags)0)) {
             break;
         }
     }
@@ -142,11 +142,13 @@ static int criticalfs_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 }
 
 static int criticalfs_open(const char *path, struct fuse_file_info *fi) {
-    // We don't need to open the file here as we'll handle it in read/write
+    (void) path;
+    (void) fi;
     return 0;
 }
 
 static int criticalfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
 
@@ -179,6 +181,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
 }
 
 static int criticalfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
 
@@ -317,6 +320,38 @@ static const struct fuse_operations criticalfs_oper = {
     .mkdir = criticalfs_mkdir,
     .rmdir = criticalfs_rmdir,
     .rename = criticalfs_rename,
+    .init = NULL,
+    .destroy = NULL,
+    .access = NULL,
+    .readlink = NULL,
+    .mknod = NULL,
+    .symlink = NULL,
+    .link = NULL,
+    .chmod = NULL,
+    .chown = NULL,
+    .truncate = NULL,
+    .statfs = NULL,
+    .flush = NULL,
+    .release = NULL,
+    .fsync = NULL,
+    .setxattr = NULL,
+    .getxattr = NULL,
+    .listxattr = NULL,
+    .removexattr = NULL,
+    .opendir = NULL,
+    .releasedir = NULL,
+    .fsyncdir = NULL,
+    .lock = NULL,
+    .utimens = NULL,
+    .bmap = NULL,
+    .ioctl = NULL,
+    .poll = NULL,
+    .write_buf = NULL,
+    .read_buf = NULL,
+    .flock = NULL,
+    .fallocate = NULL,
+    .copy_file_range = NULL,
+    .lseek = NULL,
 };
 
 int main(int argc, char *argv[]) {
