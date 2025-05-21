@@ -261,16 +261,23 @@ static int criticalfs_unlink(const char *path) {
     char fpath[PATH_MAX];
     fullpath(fpath, path);
 
-    // Remove critical file components
-    std::string mappingPath = std::string(fpath) + ".mapping";
-    std::string critPath = std::string(fpath) + ".crit";
-    std::string noncritPath = std::string(fpath) + ".noncrit";
+    // Check if this is a critical file
+    auto handler = getFileHandler(path);
+    if (handler) {
+        std::string mappingPath = std::string(fpath) + ".mapping";
+        if (access(mappingPath.c_str(), F_OK) == 0) {
+            // It's a critical file, remove the mapping and data files
+            unlink(mappingPath.c_str());
+            std::string critPath = std::string(fpath) + ".crit";
+            std::string noncritPath = std::string(fpath) + ".noncrit";
+            unlink(critPath.c_str());
+            unlink(noncritPath.c_str());
+        }
+        return 0;
 
-    unlink(mappingPath.c_str());
-    unlink(critPath.c_str());
-    unlink(noncritPath.c_str());
+    }
 
-    // Remove the main file
+    // Not a critical file, remove normally
     int res = unlink(fpath);
     if (res == -1) {
         return -errno;
