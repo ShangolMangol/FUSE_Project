@@ -326,7 +326,7 @@ static const struct fuse_operations criticalfs_oper = {
     .write       = criticalfs_write,
     // .statfs      = ...,
     // .flush       = ...,
-    .release     = criticalfs_release, // Added release to match open
+    // .release     = criticalfs_release, // Added release to match open
     // .fsync       = ...,
     // ... xattr functions ...
     // .opendir     = ...,
