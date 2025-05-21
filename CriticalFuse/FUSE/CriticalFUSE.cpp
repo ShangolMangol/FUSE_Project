@@ -203,9 +203,15 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
         if (handler->writeFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {
             return -errno;
         }
+        std::cout << "Wrote " << size << " bytes to file: " << path << std::endl;
+        std::cout << "Offset: " << offset << std::endl;
+        std::cout << "Buffer: " << buf << std::endl;
+        std::cout << "Mapping path: " << mappingPath << std::endl;
+        std::cout << "File path: " << fpath << std::endl;
+
         return size;
     }
-
+    std::cout << "Not a critical file, writing directly" << std::endl;
     // Not a critical file, write directly
     int fd = open(fpath, O_WRONLY);
     if (fd == -1) {
@@ -236,9 +242,11 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
             unlink(fpath); // Clean up the created file
             return -errno;
         }
+        std::cout << "Created mapping file: " << mappingPath << std::endl;
+
         return 0;
     }
-
+    std::cout << "Not a critical file, creating normally" << std::endl;
     // Create the file normally if not a critical file
     int fd = open(fpath, fi->flags | O_CREAT, mode);
     if (fd == -1) {

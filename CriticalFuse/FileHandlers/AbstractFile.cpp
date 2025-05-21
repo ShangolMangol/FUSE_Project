@@ -235,6 +235,11 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
                 mergedBuffer.resize(offset + size, 0);
             }
             std::memcpy(mergedBuffer.data() + offset, buffer, size);
+        } 
+        else {
+            // if the file is empty, we just need to write the new data
+            mergedBuffer.resize(offset + size, 0);
+            std::memcpy(mergedBuffer.data() + offset, buffer, size);
         }
 
     } else {
