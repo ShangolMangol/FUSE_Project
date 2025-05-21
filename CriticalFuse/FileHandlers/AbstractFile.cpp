@@ -35,6 +35,14 @@ ResultCode AbstractFileHandler::addToFileMap(int origStart, int origEnd, int map
 }
 
 ResultCode AbstractFileHandler::loadMapFromFile(const char* mappingPath) {
+    // add .mapping suffix if not present
+    std::string mappingPathStr(mappingPath);
+    const std::string mappingSuffix = ".mapping";
+    if (mappingPathStr.size() <= mappingSuffix.size() || mappingPathStr.substr(mappingPathStr.size() - mappingSuffix.size()) != mappingSuffix) {
+        mappingPathStr += mappingSuffix;
+    }
+    mappingPath = mappingPathStr.c_str();
+
     std::ifstream inFile(mappingPath);
     if (!inFile.is_open()) {
         std::cerr << "Failed to open mapping file: " << mappingPath << std::endl;
@@ -90,7 +98,15 @@ ResultCode AbstractFileHandler::loadMapFromFile(const char* mappingPath) {
 }
 
 ResultCode AbstractFileHandler::saveMapToFile(const char* mappingPath) {
-    std::ofstream outFile(mappingPath);
+    // add .mapping suffix if not present
+    std::string mappingPathStr(mappingPath);
+    const std::string mappingSuffix = ".mapping";
+    if (mappingPathStr.size() <= mappingSuffix.size() || mappingPathStr.substr(mappingPathStr.size() - mappingSuffix.size()) != mappingSuffix) {
+        mappingPathStr += mappingSuffix;
+    }
+    mappingPath = mappingPathStr.c_str();
+
+    std::ofstream outFile(mappingPath, std::ios::binary | std::ios::trunc);
     if (!outFile.is_open()) {
         std::cerr << "Failed to open file for writing: " << mappingPath << std::endl;
         return ResultCode::FAILURE;
@@ -234,7 +250,7 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
             }
             std::memcpy(mergedBuffer.data() + offset, buffer, size);
         }
-        
+
     } else {
         // New mapping
         mergedBuffer.resize(offset + size, 0);
