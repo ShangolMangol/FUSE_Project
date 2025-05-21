@@ -19,6 +19,7 @@
 #include "../FileHandlers/AbstractFile.h"
 #include "../FileHandlers/TextFile.h"
 #include "../FileHandlers/RawFile.h"
+#include "../FileHandlers/DngFile.h"
 
 #define BACKING_DIR_REL "./storage"
 static char backing_dir_abs[PATH_MAX];
@@ -48,13 +49,12 @@ static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
     }
     std::cout << "File extension: " << ext_lower << std::endl;
     // Only handle specific file types
-    if (ext_lower == "txt" || ext_lower == "jpg" || ext_lower == "raw") {
-        if (ext_lower == "txt") {
-            return std::make_unique<TextFileHandler>();
-        }
-        // Add more handlers here as needed
+    if (ext_lower == "txt") {
+        return std::make_unique<TextFileHandler>();
     }
-    
+    if (ext_lower == "dng") {
+        return std::make_unique<DngFileHandler>();
+    }
     // Unsupported file type, treat as regular file
     return nullptr;
 }

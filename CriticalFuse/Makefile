@@ -6,6 +6,8 @@ LDFLAGS = -pthread `pkg-config fuse3 --libs`
 COMMON_SRCS = \
     FileHandlers/TextFile.cpp \
     FileHandlers/AbstractFile.cpp \
+    FileHandlers/RawFile.cpp \
+    FileHandlers/DngFile.cpp \
     Utilities/Range.cpp
 
 # Target-specific sources
