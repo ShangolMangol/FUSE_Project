@@ -46,7 +46,7 @@ static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
     for (char& c : ext_lower) {
         c = std::tolower(c);
     }
-    
+    std::cout << "File extension: " << ext_lower << std::endl;
     // Only handle specific file types
     if (ext_lower == "txt" || ext_lower == "jpg" || ext_lower == "raw") {
         if (ext_lower == "txt") {
@@ -223,8 +223,6 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
 static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
-    
 
     // Only create mapping for supported file types
     auto handler = getFileHandler(path);
