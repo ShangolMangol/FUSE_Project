@@ -50,6 +50,12 @@ bool isDngMetadataTag(uint16_t tag) {
 }
 
 ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
+    
+    // if the buffer is empty, we don't need to do anything
+    if (size == 0) {
+        return ResultCode::SUCCESS;
+    }
+
     if (!buffer || size < TIFF_HEADER_SIZE) {
         std::cerr << "Invalid buffer or size too small" << std::endl;
         return ResultCode::FAILURE;

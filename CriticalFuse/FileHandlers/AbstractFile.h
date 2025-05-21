@@ -87,6 +87,7 @@ public:
      * 
      * IMPORTANT: This function is virtual and should be implemented in the derived classes.
      * Also changes fileMap, critData, and noncritData.
+     * For size = 0, the function should return SUCCESS with empty fileMap.
      * 
      * @param buffer the buffer to create the mapping from, containing the whole file content
      * @param size the size of the buffer
