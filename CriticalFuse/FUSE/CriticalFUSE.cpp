@@ -74,7 +74,7 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
             // Not a supported file type, treat as regular file
             return -ENOENT;
         }
-        if (handler->loadMapFromFile(fpath) != ResultCode::SUCCESS) {
+        if (handler->loadMapFromFile(mappingPath.c_str()) != ResultCode::SUCCESS) {
             return -errno;
         }
 
@@ -167,7 +167,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
             // Not a supported file type, treat as regular file
             return -ENOENT;
         }
-        if (handler->readFile(fpath, buf, size, offset) != ResultCode::SUCCESS) {
+        if (handler->readFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {
             return -errno;
         }
         return size;
@@ -200,7 +200,7 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
             // Not a supported file type, treat as regular file
             return -ENOENT;
         }
-        if (handler->writeFile(fpath, buf, size, offset) != ResultCode::SUCCESS) {
+        if (handler->writeFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {
             return -errno;
         }
         return size;
@@ -227,11 +227,12 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
     // Only create mapping for supported file types
     auto handler = getFileHandler(path);
     if (handler) {
+        std::string mappingPath = std::string(fpath) + ".mapping";
         if (handler->createMapping("", 0) != ResultCode::SUCCESS) {
             unlink(fpath); // Clean up the created file
             return -errno;
         }
-        if (handler->saveMapToFile(fpath) != ResultCode::SUCCESS) {
+        if (handler->saveMapToFile(mappingPath.c_str()) != ResultCode::SUCCESS) {
             unlink(fpath); // Clean up the created file
             return -errno;
         }
