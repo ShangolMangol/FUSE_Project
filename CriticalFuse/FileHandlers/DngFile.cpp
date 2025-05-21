@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <vector>
 #include <utility>
-#include <set>
 
 // Constants
 const int TIFF_HEADER_SIZE = 8;
@@ -51,6 +50,7 @@ bool isDngMetadataTag(uint16_t tag) {
 }
 
 ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
+    
     // if the buffer is empty, we don't need to do anything
     if (size == 0) {
         return ResultCode::SUCCESS;
@@ -104,7 +104,7 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
 
     // 6. Parse IFD entries
     std::vector<std::pair<uint32_t, uint32_t>> imageBlocks;
-    std::set<std::pair<uint32_t, uint32_t>> metadataBlocks;  // Using set to avoid duplicates
+    std::vector<std::pair<uint32_t, uint32_t>> metadataBlocks;
 
     for (int i = 0; i < entryCount; ++i) {
         size_t entryOffset = ifdOffset + 2 + i * IFD_ENTRY_SIZE;
@@ -118,54 +118,11 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
         uint32_t count = read32(buffer + entryOffset + 4, endian);
         uint32_t valueOffset = read32(buffer + entryOffset + 8, endian);
 
-        // Calculate data size based on type
-        uint32_t dataSize = 0;
-        switch (type) {
-            case 1: dataSize = count; break;      // BYTE
-            case 2: dataSize = count; break;      // ASCII
-            case 3: dataSize = count * 2; break;  // SHORT
-            case 4: dataSize = count * 4; break;  // LONG
-            case 5: dataSize = count * 8; break;  // RATIONAL
-            case 6: dataSize = count; break;      // SBYTE
-            case 7: dataSize = count; break;      // UNDEFINED
-            case 8: dataSize = count * 2; break;  // SSHORT
-            case 9: dataSize = count * 4; break;  // SLONG
-            case 10: dataSize = count * 8; break; // SRATIONAL
-            case 11: dataSize = count * 4; break; // FLOAT
-            case 12: dataSize = count * 8; break; // DOUBLE
-            default: continue;
-        }
-
-        // If data fits in the value field (4 bytes)
-        if (dataSize <= 4) {
-            valueOffset = entryOffset + 8;
-            dataSize = 4;
-        }
-
-        // Handle DNG metadata tags and other critical tags
-        if (isDngMetadataTag(tag) || 
-            tag == 0x0100 || // ImageWidth
-            tag == 0x0101 || // ImageLength
-            tag == 0x0102 || // BitsPerSample
-            tag == 0x0103 || // Compression
-            tag == 0x0106 || // PhotometricInterpretation
-            tag == 0x0111 || // StripOffsets
-            tag == 0x0112 || // Orientation
-            tag == 0x0115 || // SamplesPerPixel
-            tag == 0x0116 || // RowsPerStrip
-            tag == 0x0117 || // StripByteCounts
-            tag == 0x011C || // PlanarConfiguration
-            tag == 0x0128 || // ResolutionUnit
-            tag == 0x0131 || // Software
-            tag == 0x0132 || // DateTime
-            tag == 0x013B || // Artist
-            tag == 0x013C || // HostComputer
-            tag == 0x0140 || // ColorMap
-            tag == 0x014A || // SubIFDs
-            tag == 0x8769 || // ExifIFD
-            tag == 0x8825) { // GPSIFD
+        // Handle DNG metadata tags
+        if (isDngMetadataTag(tag)) {
+            uint32_t dataSize = count * (type == 3 ? 2 : 4); // Approximate size
             if (valueOffset + dataSize <= size) {
-                metadataBlocks.emplace(valueOffset, valueOffset + dataSize - 1);
+                metadataBlocks.emplace_back(valueOffset, dataSize);
             }
         }
         // Handle image data tags
@@ -196,12 +153,12 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
 
     // 7. Map metadata blocks as critical
     size_t mappedOffset = TIFF_HEADER_SIZE + ifdSize;
-    for (const auto& [start, end] : metadataBlocks) {
-        if (start < size && end < size) {
-            addToFileMap(start, end,
-                        mappedOffset, mappedOffset + (end - start),
+    for (const auto& [offset, length] : metadataBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            addToFileMap(offset, offset + length - 1,
+                        mappedOffset, mappedOffset + length - 1,
                         CriticalType::CRITICAL_DATA);
-            mappedOffset += (end - start + 1);
+            mappedOffset += length;
         }
     }
 
