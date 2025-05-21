@@ -53,7 +53,6 @@ static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
             return std::make_unique<TextFileHandler>();
         }
         // Add more handlers here as needed
-        return std::make_unique<RawFileHandler>();
     }
     
     // Unsupported file type, treat as regular file

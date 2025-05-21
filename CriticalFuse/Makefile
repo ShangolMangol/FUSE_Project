@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -I. -D_FILE_OFFSET_BITS=64 `pkg-config fuse3 --cflags`
+CXXFLAGS = -std=c++17 -I. -D_FILE_OFFSET_BITS=64 `pkg-config fuse3 --cflags`
 LDFLAGS = -pthread `pkg-config fuse3 --libs`
 
 # Source files
