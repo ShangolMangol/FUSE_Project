@@ -221,20 +221,20 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
         mergedBuffer.resize(totalSize, 0);
 
         // if the file is empty, we don't need to read anything
-        if(totalSize == 0) {
-            break;
-        }
+        if(totalSize != 0) {
+        
+            if (readFile(mappingPath, mergedBuffer.data(), totalSize, 0) != ResultCode::SUCCESS) {
+                std::cerr << "Failed to reconstruct existing data\n";
+                return ResultCode::FAILURE;
+            }
 
-        if (readFile(mappingPath, mergedBuffer.data(), totalSize, 0) != ResultCode::SUCCESS) {
-            std::cerr << "Failed to reconstruct existing data\n";
-            return ResultCode::FAILURE;
+            // Merge new buffer
+            if (offset + size > mergedBuffer.size()) {
+                mergedBuffer.resize(offset + size, 0);
+            }
+            std::memcpy(mergedBuffer.data() + offset, buffer, size);
         }
-
-        // Merge new buffer
-        if (offset + size > mergedBuffer.size()) {
-            mergedBuffer.resize(offset + size, 0);
-        }
-        std::memcpy(mergedBuffer.data() + offset, buffer, size);
+        
     } else {
         // New mapping
         mergedBuffer.resize(offset + size, 0);
