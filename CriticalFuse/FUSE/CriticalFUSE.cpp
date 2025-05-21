@@ -216,12 +216,7 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
     char fpath[PATH_MAX];
     fullpath(fpath, path);
 
-    // Create the file
-    int fd = open(fpath, fi->flags | O_CREAT, mode);
-    if (fd == -1) {
-        return -errno;
-    }
-    close(fd);
+    
 
     // Only create mapping for supported file types
     auto handler = getFileHandler(path);
@@ -235,7 +230,15 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
             unlink(fpath); // Clean up the created file
             return -errno;
         }
+        return 0;
     }
+
+    // Create the file normally if not a critical file
+    int fd = open(fpath, fi->flags | O_CREAT, mode);
+    if (fd == -1) {
+        return -errno;
+    }
+    close(fd);
 
     return 0;
 }

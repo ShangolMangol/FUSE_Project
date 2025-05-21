@@ -220,6 +220,11 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
         }
         mergedBuffer.resize(totalSize, 0);
 
+        // if the file is empty, we don't need to read anything
+        if(totalSize == 0) {
+            break;
+        }
+
         if (readFile(mappingPath, mergedBuffer.data(), totalSize, 0) != ResultCode::SUCCESS) {
             std::cerr << "Failed to reconstruct existing data\n";
             return ResultCode::FAILURE;
