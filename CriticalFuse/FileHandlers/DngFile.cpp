@@ -2,6 +2,9 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
+#include <vector>
+#include <utility>
 
 // Constants
 const int TIFF_HEADER_SIZE = 8;
