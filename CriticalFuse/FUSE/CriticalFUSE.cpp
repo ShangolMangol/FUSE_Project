@@ -309,7 +309,6 @@ static int criticalfs_rename(const char *from, const char *to, unsigned int flag
 }
 
 static const struct fuse_operations criticalfs_oper = {
-<<<<<<< HEAD
     .getattr     = criticalfs_getattr,
     // .readlink    = ...,
     // .mknod       = ...,
@@ -339,50 +338,6 @@ static const struct fuse_operations criticalfs_oper = {
     // .access      = ...,
     .create      = criticalfs_create,
     // ... other fields ...
-=======
-    (fuse_getattr_t)criticalfs_getattr,    // getattr
-    NULL,                                  // readlink
-    NULL,                                  // mknod
-    (fuse_mkdir_t)criticalfs_mkdir,        // mkdir
-    (fuse_unlink_t)criticalfs_unlink,      // unlink
-    (fuse_rmdir_t)criticalfs_rmdir,        // rmdir
-    NULL,                                  // symlink
-    (fuse_rename_t)criticalfs_rename,      // rename
-    NULL,                                  // link
-    NULL,                                  // chmod
-    NULL,                                  // chown
-    NULL,                                  // truncate
-    (fuse_open_t)criticalfs_open,          // open
-    (fuse_read_t)criticalfs_read,          // read
-    (fuse_write_t)criticalfs_write,        // write
-    NULL,                                  // statfs
-    NULL,                                  // flush
-    NULL,                                  // release
-    NULL,                                  // fsync
-    NULL,                                  // setxattr
-    NULL,                                  // getxattr
-    NULL,                                  // listxattr
-    NULL,                                  // removexattr
-    NULL,                                  // opendir
-    (fuse_readdir_t)criticalfs_readdir,    // readdir
-    NULL,                                  // releasedir
-    NULL,                                  // fsyncdir
-    NULL,                                  // access
-    (fuse_create_t)criticalfs_create,      // create
-    NULL,                                  // lock
-    NULL,                                  // utimens
-    NULL,                                  // bmap
-    NULL,                                  // ioctl
-    NULL,                                  // poll
-    NULL,                                  // write_buf
-    NULL,                                  // read_buf
-    NULL,                                  // flock
-    NULL,                                  // fallocate
-    NULL,                                  // copy_file_range
-    NULL,                                  // lseek
-    NULL,                                  // init
-    NULL                                   // destroy
->>>>>>> origin/main
 };
 
 int main(int argc, char *argv[]) {
