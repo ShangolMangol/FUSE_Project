@@ -309,16 +309,48 @@ static int criticalfs_rename(const char *from, const char *to, unsigned int flag
 }
 
 static const struct fuse_operations criticalfs_oper = {
-    .getattr = criticalfs_getattr,
-    .readdir = criticalfs_readdir,
-    .open = criticalfs_open,
-    .create = criticalfs_create,
-    .read = criticalfs_read,
-    .write = criticalfs_write,
-    .unlink = criticalfs_unlink,
-    .mkdir = criticalfs_mkdir,
-    .rmdir = criticalfs_rmdir,
-    .rename = criticalfs_rename,
+    criticalfs_getattr,    // getattr
+    NULL,                  // readlink
+    NULL,                  // mknod
+    criticalfs_mkdir,      // mkdir
+    criticalfs_unlink,     // unlink
+    criticalfs_rmdir,      // rmdir
+    NULL,                  // symlink
+    criticalfs_rename,     // rename
+    NULL,                  // link
+    NULL,                  // chmod
+    NULL,                  // chown
+    NULL,                  // truncate
+    criticalfs_open,       // open
+    criticalfs_read,       // read
+    criticalfs_write,      // write
+    NULL,                  // statfs
+    NULL,                  // flush
+    NULL,                  // release
+    NULL,                  // fsync
+    NULL,                  // setxattr
+    NULL,                  // getxattr
+    NULL,                  // listxattr
+    NULL,                  // removexattr
+    NULL,                  // opendir
+    criticalfs_readdir,    // readdir
+    NULL,                  // releasedir
+    NULL,                  // fsyncdir
+    NULL,                  // access
+    criticalfs_create,     // create
+    NULL,                  // lock
+    NULL,                  // utimens
+    NULL,                  // bmap
+    NULL,                  // ioctl
+    NULL,                  // poll
+    NULL,                  // write_buf
+    NULL,                  // read_buf
+    NULL,                  // flock
+    NULL,                  // fallocate
+    NULL,                  // copy_file_range
+    NULL,                  // lseek
+    NULL,                  // init
+    NULL                   // destroy
 };
 
 int main(int argc, char *argv[]) {
