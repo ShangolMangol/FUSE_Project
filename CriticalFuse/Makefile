@@ -8,6 +8,7 @@ COMMON_SRCS = \
     FileHandlers/AbstractFile.cpp \
     FileHandlers/RawFile.cpp \
     FileHandlers/DngFile.cpp \
+    FileHandlers/PngFile.cpp \
     Utilities/Range.cpp
 
 # Target-specific sources
