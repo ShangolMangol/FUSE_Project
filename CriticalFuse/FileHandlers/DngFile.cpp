@@ -175,3 +175,17 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
 
     return ResultCode::SUCCESS;
 }
+
+/**
+TODO: fix the mapping file generation
+
+Wrong output from the DNG file handler:
+0-7 0-7 CRITICAL_DATA
+8-721 8-721 CRITICAL_DATA
+13334-13369 722-757 CRITICAL_DATA
+13478-13513 758-793 CRITICAL_DATA
+13646-13657 794-805 CRITICAL_DATA
+13742-308141 0-131327 NON_CRITICAL_DATA
+
+  
+ */
