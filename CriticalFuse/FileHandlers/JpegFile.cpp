@@ -3,6 +3,10 @@
 #include <cstring>
 
 ResultCode JpegFileHandler::createMapping(const char* buffer, size_t size) {
+    if (size == 0) {
+        return ResultCode::SUCCESS; // Nothing to map
+    }
+    
     if (size < 2 || static_cast<uint8_t>(buffer[0]) != 0xFF || static_cast<uint8_t>(buffer[1]) != 0xD8) {
         return ResultCode::FAILURE; // Not a valid JPEG
     }
