@@ -22,6 +22,7 @@
 #include "../FileHandlers/DngFile.h"
 #include "../FileHandlers/PngFile.h"
 #include "../FileHandlers/BmpFile.h"
+#include "../FileHandlers/JpegFile.h"
 
 #define BACKING_DIR_REL "./storage"
 static char backing_dir_abs[PATH_MAX];
@@ -63,6 +64,10 @@ static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
     else if (ext_lower == "bmp") {
         return std::make_unique<BmpFileHandler>();
     }
+    else if (ext_lower == "jpeg" || ext_lower == "jpg") {
+        return std::make_unique<JpegFileHandler>();
+    }
+    
     // Unsupported file type, treat as regular file
     return nullptr;
 }
