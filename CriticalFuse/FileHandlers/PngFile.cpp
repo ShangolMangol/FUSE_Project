@@ -1,5 +1,6 @@
 #include "PngFile.h"
 #include <cstring>
+#include <cstdint>
 
 ResultCode PngFileHandler::createMapping(const char* buffer1, size_t size) {
     if (size == 0) {
