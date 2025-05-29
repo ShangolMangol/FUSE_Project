@@ -6,9 +6,7 @@ ResultCode BmpFileHandler::createMapping(const char* buffer, size_t size) {
     if (size == 0) {
         return ResultCode::SUCCESS; // Nothing to map
     }
-    if (size < 54) return ResultCode::FAILURE; // Minimum BMP size
-
-    size_t origOffset = 0;
+        size_t origOffset = 0;
     size_t critOffset = 0;
     size_t noncritOffset = 0;
 
@@ -17,27 +15,27 @@ ResultCode BmpFileHandler::createMapping(const char* buffer, size_t size) {
         return ResultCode::FAILURE;
     }
 
-    // === Header ===
-    // File header (14 bytes)
+    // File header (14 bytes) — critical
     addToFileMap(origOffset, origOffset + 13, critOffset, critOffset + 13, CriticalType::CRITICAL_DATA);
     origOffset += 14;
     critOffset += 14;
 
-    // DIB header (assume BITMAPINFOHEADER, 40 bytes)
+    // DIB header (assume BITMAPINFOHEADER — 40 bytes) — critical
     addToFileMap(origOffset, origOffset + 39, critOffset, critOffset + 39, CriticalType::CRITICAL_DATA);
+
+    // Get image dimensions and pixel data offset
+    int32_t width = *(const int32_t*)(buffer + 18);
+    int32_t height = *(const int32_t*)(buffer + 22);
+    uint16_t bitsPerPixel = *(const uint16_t*)(buffer + 28);
+    uint32_t pixelDataOffset = *(const uint32_t*)(buffer + 10);
+    origOffset += 40;
     critOffset += 40;
 
-    // Extract image info
-    const uint32_t pixelDataOffset = *reinterpret_cast<const uint32_t*>(buffer + 10);
-    const int32_t width = *reinterpret_cast<const int32_t*>(buffer + 18);
-    const int32_t height = *reinterpret_cast<const int32_t*>(buffer + 22);
-    const uint16_t bitsPerPixel = *reinterpret_cast<const uint16_t*>(buffer + 28);
-
-    if (bitsPerPixel != 24 || width <= 0 || height == 0 || pixelDataOffset > size) {
-        return ResultCode::FAILURE; // Only 24-bit BMPs supported
+    if (pixelDataOffset > size || bitsPerPixel != 24 || width <= 0 || height == 0) {
+        return ResultCode::FAILURE; // Only 24-bit BMP supported
     }
 
-    // Color table or gap between headers and pixel data (mark critical)
+    // Critical area before pixel data (e.g., color table if any)
     if (origOffset < pixelDataOffset) {
         size_t gap = pixelDataOffset - origOffset;
         addToFileMap(origOffset, origOffset + gap - 1, critOffset, critOffset + gap - 1, CriticalType::CRITICAL_DATA);
@@ -45,31 +43,25 @@ ResultCode BmpFileHandler::createMapping(const char* buffer, size_t size) {
         critOffset += gap;
     }
 
-    // === Pixel data ===
-    const size_t bytesPerPixel = bitsPerPixel / 8;
-    const size_t rowSizeUnpadded = width * bytesPerPixel;
-    const size_t rowSizePadded = ((rowSizeUnpadded + 3) / 4) * 4;
-    const size_t rowPadding = rowSizePadded - rowSizeUnpadded;
-    const size_t absHeight = static_cast<size_t>(height < 0 ? -height : height);
+    // Row padding: each row in BMP is aligned to 4 bytes
+    size_t rowSize = ((width * 3 + 3) / 4) * 4;
+    size_t pixelSize = width * 3;
+    size_t absHeight = height > 0 ? height : -height;
 
     for (size_t row = 0; row < absHeight; ++row) {
-        size_t rowStart = pixelDataOffset + row * rowSizePadded;
-        size_t pixelStart = rowStart;
-        size_t paddingStart = pixelStart + rowSizeUnpadded;
+        if (origOffset + rowSize > size) return ResultCode::FAILURE;
 
-        // Bounds check
-        if (paddingStart > size || paddingStart + rowPadding > size) {
-            return ResultCode::FAILURE;
-        }
+        // Map pixel data (non-critical)
+        addToFileMap(origOffset, origOffset + pixelSize - 1, noncritOffset, noncritOffset + pixelSize - 1, CriticalType::NON_CRITICAL_DATA);
+        origOffset += pixelSize;
+        noncritOffset += pixelSize;
 
-        // Non-critical: pixel color data
-        addToFileMap(pixelStart, paddingStart - 1, noncritOffset, noncritOffset + rowSizeUnpadded - 1, CriticalType::NON_CRITICAL_DATA);
-        noncritOffset += rowSizeUnpadded;
-
-        // Critical: padding bytes
-        if (rowPadding > 0) {
-            addToFileMap(paddingStart, paddingStart + rowPadding - 1, critOffset, critOffset + rowPadding - 1, CriticalType::CRITICAL_DATA);
-            critOffset += rowPadding;
+        // Map padding (critical)
+        size_t padding = rowSize - pixelSize;
+        if (padding > 0) {
+            addToFileMap(origOffset, origOffset + padding - 1, critOffset, critOffset + padding - 1, CriticalType::CRITICAL_DATA);
+            origOffset += padding;
+            critOffset += padding;
         }
     }
 
