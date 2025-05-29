@@ -65,3 +65,4 @@ ResultCode PngFileHandler::createMapping(const char* buffer1, size_t size) {
 
     return ResultCode::SUCCESS;
 }
+
