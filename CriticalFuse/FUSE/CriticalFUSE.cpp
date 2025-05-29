@@ -346,6 +346,29 @@ static int criticalfs_rename(const char *from, const char *to, unsigned int flag
     return 0;
 }
 
+static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+    (void) fi;
+    char fpath[PATH_MAX];
+    fullpath(fpath, path);
+
+    // Check if this is a critical file
+    std::string mappingPath = std::string(fpath) + ".mapping";
+    if (access(mappingPath.c_str(), F_OK) == 0) {
+        // For critical files, we'll allow truncate to 0 (which is what happens when moving to trash)
+        if (size == 0) {
+            return 0;
+        }
+        return -EACCES;  // Don't allow other truncations for critical files
+    }
+
+    // For regular files, use normal truncate
+    int res = truncate(fpath, size);
+    if (res == -1) {
+        return -errno;
+    }
+    return 0;
+}
+
 static const struct fuse_operations criticalfs_oper = {
     .getattr     = criticalfs_getattr,
     // .readlink    = ...,
@@ -358,13 +381,13 @@ static const struct fuse_operations criticalfs_oper = {
     // .link        = ...,
     // .chmod       = ...,
     // .chown       = ...,
-    // .truncate    = ...,
+    .truncate    = criticalfs_truncate,
     .open        = criticalfs_open,
     .read        = criticalfs_read,
     .write       = criticalfs_write,
     // .statfs      = ...,
     // .flush       = ...,
-    // .release     = criticalfs_release, // Added release to match open
+    // .release     = ...,
     // .fsync       = ...,
     // ... xattr functions ...
     // .opendir     = ...,
