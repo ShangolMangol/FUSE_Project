@@ -285,6 +285,7 @@ static int criticalfs_unlink(const char *path) {
             std::string noncritPath = std::string(fpath) + ".noncrit";
             unlink(critPath.c_str());
             unlink(noncritPath.c_str());
+            unlink(fpath);
         }
         return 0;
 
