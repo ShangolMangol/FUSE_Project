@@ -4,34 +4,95 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #define BUFFER_SIZE (1024 * 1024)  // 1MB buffer
 
 void print_usage(const char *program_name) {
-    fprintf(stderr, "Usage: %s <file> <start_offset> <end_offset>\n", program_name);
-    fprintf(stderr, "All bytes in [start_offset, end_offset] inclusive will be bitwise inverted.\n");
+    fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "  Normal mode: %s <file> <start_offset> <end_offset>\n", program_name);
+    fprintf(stderr, "  Random mode: %s -r <percentage> <file>\n", program_name);
+    fprintf(stderr, "  In normal mode, bytes in [start_offset, end_offset] will be bitwise inverted.\n");
+    fprintf(stderr, "  In random mode, <percentage> of the entire file's bytes will be randomly flipped.\n");
+}
+
+// Function to flip bits in a buffer
+void flip_bits_in_buffer(unsigned char *buffer, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        buffer[i] = ~buffer[i];  // Bitwise NOT operation
+    }
+}
+
+// Function to randomly flip bits in a buffer based on percentage
+void random_flip_bits_in_buffer(unsigned char *buffer, size_t size, double percentage) {
+    // Calculate how many bytes to flip
+    size_t bytes_to_flip = (size_t)((size * percentage) / 100.0);
+    
+    // Create an array of indices
+    size_t *indices = malloc(size * sizeof(size_t));
+    if (!indices) {
+        fprintf(stderr, "Error: Failed to allocate memory for indices\n");
+        return;
+    }
+    
+    // Initialize indices array
+    for (size_t i = 0; i < size; i++) {
+        indices[i] = i;
+    }
+    
+    // Shuffle indices using Fisher-Yates algorithm
+    for (size_t i = size - 1; i > 0; i--) {
+        size_t j = rand() % (i + 1);
+        // Swap indices[i] and indices[j]
+        size_t temp = indices[i];
+        indices[i] = indices[j];
+        indices[j] = temp;
+    }
+    
+    // Flip the first 'bytes_to_flip' bytes at the shuffled positions
+    for (size_t i = 0; i < bytes_to_flip; i++) {
+        buffer[indices[i]] = ~buffer[indices[i]];
+    }
+    
+    free(indices);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
+    int random_mode = 0;
+    int arg_offset = 1;
+    double percentage = 0.0;
+
+    // Check for random flag
+    if (argc > 1 && (strcmp(argv[1], "-r") == 0 || strcmp(argv[1], "--random") == 0)) {
+        random_mode = 1;
+        arg_offset = 2;
+        
+        // Check if we have enough arguments for random mode
+        if (argc != 4) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        
+        // Parse percentage
+        percentage = strtod(argv[2], NULL);
+        if (percentage < 0.0 || percentage > 100.0) {
+            fprintf(stderr, "Error: Percentage must be between 0 and 100\n");
+            return 1;
+        }
+        arg_offset = 3;
+    } else if (argc != 4) {
         print_usage(argv[0]);
         return 1;
     }
 
-    const char *filename = argv[1];
-    long start_offset = strtol(argv[2], NULL, 10);
-    long end_offset = strtol(argv[3], NULL, 10);
-
-    // Validate inputs
-    if (start_offset < 0 || end_offset < 0) {
-        fprintf(stderr, "Error: Offsets must be non-negative\n");
-        return 1;
+    // Initialize random seed
+    if (random_mode) {
+        srand(time(NULL));
     }
 
-    if (start_offset > end_offset) {
-        fprintf(stderr, "Error: start_offset must be <= end_offset\n");
-        return 1;
-    }
+    const char *filename = argv[arg_offset];
+    long start_offset = 0;
+    long end_offset = 0;
 
     // Get file size
     struct stat st;
@@ -40,10 +101,30 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (end_offset >= st.st_size) {
-        fprintf(stderr, "Error: end_offset (%ld) is beyond end of file (file size: %ld bytes)\n",
-                end_offset, (long)st.st_size);
-        return 1;
+    if (random_mode) {
+        // In random mode, use the entire file
+        end_offset = st.st_size - 1;
+    } else {
+        // In normal mode, use provided offsets
+        start_offset = strtol(argv[arg_offset + 1], NULL, 10);
+        end_offset = strtol(argv[arg_offset + 2], NULL, 10);
+
+        // Validate offsets
+        if (start_offset < 0 || end_offset < 0) {
+            fprintf(stderr, "Error: Offsets must be non-negative\n");
+            return 1;
+        }
+
+        if (start_offset > end_offset) {
+            fprintf(stderr, "Error: start_offset must be <= end_offset\n");
+            return 1;
+        }
+
+        if (end_offset >= st.st_size) {
+            fprintf(stderr, "Error: end_offset (%ld) is beyond end of file (file size: %ld bytes)\n",
+                    end_offset, (long)st.st_size);
+            return 1;
+        }
     }
 
     // Open file for reading and writing
@@ -89,9 +170,11 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // Flip bits in buffer
-        for (size_t i = 0; i < bytes_read; i++) {
-            buffer[i] = ~buffer[i];  // Bitwise NOT operation
+        // Flip bits in buffer (either all or randomly)
+        if (random_mode) {
+            random_flip_bits_in_buffer(buffer, bytes_read, percentage);
+        } else {
+            flip_bits_in_buffer(buffer, bytes_read);
         }
 
         // Seek back to write position
@@ -118,7 +201,12 @@ int main(int argc, char *argv[]) {
     free(buffer);
     fclose(file);
 
-    printf("Successfully flipped all bits in bytes from offset %ld to %ld in %s\n",
-           start_offset, end_offset, filename);
+    if (random_mode) {
+        printf("Successfully randomly flipped %.1f%% of bits in the entire file %s\n",
+               percentage, filename);
+    } else {
+        printf("Successfully flipped all bits in bytes from offset %ld to %ld in %s\n",
+               start_offset, end_offset, filename);
+    }
     return 0;
 } 
