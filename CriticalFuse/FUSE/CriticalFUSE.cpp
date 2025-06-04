@@ -368,6 +368,47 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
     }
     return 0;
 }
+static int criticalfs_setattr(const char *path, struct stat *stbuf, int to_set, struct fuse_file_info *fi) {
+    (void) fi;
+    char fpath[PATH_MAX];
+    fullpath(fpath, path);
+
+    std::string mappingPath = std::string(fpath) + ".mapping";
+    bool is_critical = (access(mappingPath.c_str(), F_OK) == 0);
+
+    if (is_critical){
+        return 0; 
+    }
+    
+    int res;
+
+    if (to_set & FUSE_SET_ATTR_MODE) {
+        res = chmod(fpath, stbuf->st_mode);
+        if (res == -1) return -errno;
+    }
+
+    if (to_set & FUSE_SET_ATTR_UID) {
+        res = chown(fpath, stbuf->st_uid, -1);
+        if (res == -1) return -errno;
+    }
+
+    if (to_set & FUSE_SET_ATTR_GID) {
+        res = chown(fpath, -1, stbuf->st_gid);
+        if (res == -1) return -errno;
+    }
+
+    if (!is_critical && (to_set & FUSE_SET_ATTR_SIZE)) {
+        res = truncate(fpath, stbuf->st_size);
+        if (res == -1) return -errno;
+    }
+
+    res = update_times(fpath, stbuf, to_set);
+    if (res != 0) return res;
+
+    return 0;
+}
+
+
 
 static const struct fuse_operations criticalfs_oper = {
     .getattr     = criticalfs_getattr,
@@ -379,8 +420,7 @@ static const struct fuse_operations criticalfs_oper = {
     // .symlink     = ...,
     .rename      = criticalfs_rename,
     // .link        = ...,
-    // .chmod       = ...,
-    // .chown       = ...,
+    .setattr     = criticalfs_setattr,
     .truncate    = criticalfs_truncate,
     .open        = criticalfs_open,
     .read        = criticalfs_read,
