@@ -27,6 +27,14 @@
 #define BACKING_DIR_REL "./storage"
 static char backing_dir_abs[PATH_MAX];
 
+// FUSE attribute flags
+#define FUSE_SET_ATTR_MODE  (1 << 0)
+#define FUSE_SET_ATTR_UID   (1 << 1)
+#define FUSE_SET_ATTR_GID   (1 << 2)
+#define FUSE_SET_ATTR_SIZE  (1 << 3)
+#define FUSE_SET_ATTR_ATIME (1 << 4)
+#define FUSE_SET_ATTR_MTIME (1 << 5)
+
 // Helper to construct the full path in the backing directory
 static void fullpath(char fpath[PATH_MAX], const char *path) {
     if (strcmp(path, "/") == 0) {
@@ -70,6 +78,28 @@ static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
     
     // Unsupported file type, treat as regular file
     return nullptr;
+}
+
+// Helper function to update file times
+static int update_times(const char* path, struct stat* stbuf, int to_set) {
+    struct timespec ts[2];
+    ts[0].tv_sec = 0;
+    ts[0].tv_nsec = UTIME_OMIT;
+    ts[1].tv_sec = 0;
+    ts[1].tv_nsec = UTIME_OMIT;
+
+    if (to_set & FUSE_SET_ATTR_ATIME) {
+        ts[0] = stbuf->st_atim;
+    }
+    if (to_set & FUSE_SET_ATTR_MTIME) {
+        ts[1] = stbuf->st_mtim;
+    }
+
+    int res = utimensat(AT_FDCWD, path, ts, 0);
+    if (res == -1) {
+        return -errno;
+    }
+    return 0;
 }
 
 // FUSE operations
@@ -368,6 +398,7 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
     }
     return 0;
 }
+
 static int criticalfs_setattr(const char *path, struct stat *stbuf, int to_set, struct fuse_file_info *fi) {
     (void) fi;
     char fpath[PATH_MAX];
@@ -376,7 +407,7 @@ static int criticalfs_setattr(const char *path, struct stat *stbuf, int to_set, 
     std::string mappingPath = std::string(fpath) + ".mapping";
     bool is_critical = (access(mappingPath.c_str(), F_OK) == 0);
 
-    if (is_critical){
+    if (is_critical) {
         return 0; 
     }
     
@@ -407,8 +438,6 @@ static int criticalfs_setattr(const char *path, struct stat *stbuf, int to_set, 
 
     return 0;
 }
-
-
 
 static const struct fuse_operations criticalfs_oper = {
     .getattr     = criticalfs_getattr,
