@@ -399,45 +399,45 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
     return 0;
 }
 
-static int criticalfs_setattr(const char *path, struct stat *stbuf, int to_set, struct fuse_file_info *fi) {
-    (void) fi;
-    char fpath[PATH_MAX];
-    fullpath(fpath, path);
+// static int criticalfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
+//     (void) fi;
+//     char fpath[PATH_MAX];
+//     fullpath(fpath, path);
 
-    std::string mappingPath = std::string(fpath) + ".mapping";
-    bool is_critical = (access(mappingPath.c_str(), F_OK) == 0);
+//     // Check if this is a critical file
+//     std::string mappingPath = std::string(fpath) + ".mapping";
+//     bool is_critical = (access(mappingPath.c_str(), F_OK) == 0);
 
-    if (is_critical) {
-        return 0; 
-    }
-    
-    int res;
+//     if (is_critical) {
+//         return 0;  // Don't allow mode changes for critical files
+//     }
 
-    if (to_set & FUSE_SET_ATTR_MODE) {
-        res = chmod(fpath, stbuf->st_mode);
-        if (res == -1) return -errno;
-    }
+//     int res = chmod(fpath, mode);
+//     if (res == -1) {
+//         return -errno;
+//     }
+//     return 0;
+// }
 
-    if (to_set & FUSE_SET_ATTR_UID) {
-        res = chown(fpath, stbuf->st_uid, -1);
-        if (res == -1) return -errno;
-    }
+// static int criticalfs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
+//     (void) fi;
+//     char fpath[PATH_MAX];
+//     fullpath(fpath, path);
 
-    if (to_set & FUSE_SET_ATTR_GID) {
-        res = chown(fpath, -1, stbuf->st_gid);
-        if (res == -1) return -errno;
-    }
+//     // Check if this is a critical file
+//     std::string mappingPath = std::string(fpath) + ".mapping";
+//     bool is_critical = (access(mappingPath.c_str(), F_OK) == 0);
 
-    if (!is_critical && (to_set & FUSE_SET_ATTR_SIZE)) {
-        res = truncate(fpath, stbuf->st_size);
-        if (res == -1) return -errno;
-    }
+//     if (is_critical) {
+//         return 0;  // Don't allow ownership changes for critical files
+//     }
 
-    res = update_times(fpath, stbuf, to_set);
-    if (res != 0) return res;
-
-    return 0;
-}
+//     int res = chown(fpath, uid, gid);
+//     if (res == -1) {
+//         return -errno;
+//     }
+//     return 0;
+// }
 
 static const struct fuse_operations criticalfs_oper = {
     .getattr     = criticalfs_getattr,
@@ -449,7 +449,8 @@ static const struct fuse_operations criticalfs_oper = {
     // .symlink     = ...,
     .rename      = criticalfs_rename,
     // .link        = ...,
-    .setattr     = criticalfs_setattr,
+    // .chmod       = criticalfs_chmod,
+    // .chown       = criticalfs_chown,
     .truncate    = criticalfs_truncate,
     .open        = criticalfs_open,
     .read        = criticalfs_read,
