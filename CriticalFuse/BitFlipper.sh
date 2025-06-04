@@ -1,41 +1,43 @@
 #!/bin/bash
 
-# Usage: ./flip_bit.sh <file> <byte_offset> <bit_position>
-# bit_position: 0 (LSB) to 7 (MSB)
+# Usage: ./flip_bytes.sh <file> <start_offset> <end_offset>
+# All bytes in [start_offset, end_offset] inclusive will be bitwise inverted.
 
 if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <file> <byte_offset> <bit_position (0-7)>"
+    echo "Usage: $0 <file> <start_offset> <end_offset>"
     exit 1
 fi
 
 FILE="$1"
-OFFSET="$2"
-BIT="$3"
+START="$2"
+END="$3"
 
 if [ ! -f "$FILE" ]; then
     echo "Error: File not found: $FILE"
     exit 1
 fi
 
-if [ "$BIT" -lt 0 ] || [ "$BIT" -gt 7 ]; then
-    echo "Error: Bit position must be between 0 and 7"
+if [ "$START" -gt "$END" ]; then
+    echo "Error: start_offset must be <= end_offset"
     exit 1
 fi
 
-# Read 1 byte from the offset
-BYTE_HEX=$(dd if="$FILE" bs=1 count=1 skip="$OFFSET" 2>/dev/null | xxd -p)
-
-if [ -z "$BYTE_HEX" ]; then
-    echo "Error: Offset beyond end of file"
+FILESIZE=$(stat -c%s "$FILE")
+if [ "$END" -ge "$FILESIZE" ]; then
+    echo "Error: end_offset is beyond end of file (file size: $FILESIZE bytes)"
     exit 1
 fi
 
-# Convert to decimal, flip the bit, convert back to hex
-BYTE_DEC=$(( 0x$BYTE_HEX ))
-FLIPPED_DEC=$(( BYTE_DEC ^ (1 << BIT) ))
-FLIPPED_HEX=$(printf "%02x" $FLIPPED_DEC)
+for (( i = START; i <= END; i++ )); do
+    BYTE_HEX=$(dd if="$FILE" bs=1 count=1 skip="$i" 2>/dev/null | xxd -p)
+    if [ -z "$BYTE_HEX" ]; then
+        echo "Warning: failed to read byte at offset $i"
+        continue
+    fi
+    BYTE_DEC=$(( 0x$BYTE_HEX ))
+    FLIPPED_DEC=$(( BYTE_DEC ^ 0xFF ))  # flip all 8 bits
+    FLIPPED_HEX=$(printf "%02x" $FLIPPED_DEC)
+    printf "$FLIPPED_HEX" | xxd -r -p | dd of="$FILE" bs=1 seek="$i" conv=notrunc status=none
+done
 
-# Write the modified byte back
-printf "$FLIPPED_HEX" | xxd -r -p | dd of="$FILE" bs=1 seek="$OFFSET" conv=notrunc status=none
-
-echo "Flipped bit $BIT at byte offset $OFFSET in $FILE"
+echo "Flipped all bits in bytes from offset $START to $END in $FILE"
