@@ -24,9 +24,10 @@ FUSE_OBJS = $(FUSE_SRCS:.cpp=.o)
 # Executables
 TARGET = HandlerTest
 FUSE_TARGET = CriticalFUSE
+BITFLIPPER_TARGET = BitFlipper
 
 # Default target
-all: $(TARGET) $(FUSE_TARGET)
+all: $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET)
 
 # Linking
 $(TARGET): $(HANDLER_OBJS)
@@ -35,13 +36,16 @@ $(TARGET): $(HANDLER_OBJS)
 $(FUSE_TARGET): $(FUSE_OBJS)
 	$(CXX) $(FUSE_OBJS) -o $@ $(LDFLAGS)
 
+$(BITFLIPPER_TARGET): BitFlipper.c
+	$(CC) -o $@ $<
+
 # Compilation rule
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Clean
 clean:
-	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET)
+	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET)
 
 # Run
 run: $(TARGET)
