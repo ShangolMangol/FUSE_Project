@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <math.h>
 
 #define BUFFER_SIZE (1024 * 1024)  // 1MB buffer
 
@@ -14,7 +15,7 @@ void print_usage(const char *program_name) {
     fprintf(stderr, "  Random mode: %s -r <percentage> <file>\n", program_name);
     fprintf(stderr, "  In normal mode, bytes in [start_offset, end_offset] will be bitwise inverted.\n");
     fprintf(stderr, "  In random mode, <percentage> of the entire file's bytes will be randomly flipped.\n");
-    fprintf(stderr, "  Percentage must be between 0 and 0.001\n");
+    fprintf(stderr, "  Percentage must be between 0 and 100 with precision of 0.001\n");
 }
 
 // Function to flip bits in a buffer
@@ -76,10 +77,12 @@ int main(int argc, char *argv[]) {
         
         // Parse percentage
         percentage = strtod(argv[2], NULL);
-        if (percentage < 0.0 || percentage > 0.001) {
-            fprintf(stderr, "Error: Percentage must be between 0 and 0.001\n");
+        if (percentage < 0.0 || percentage > 100.0) {
+            fprintf(stderr, "Error: Percentage must be between 0 and 100\n");
             return 1;
         }
+        // Round to 3 decimal places to ensure precision of 0.001
+        percentage = round(percentage * 1000.0) / 1000.0;
         arg_offset = 3;
     } else if (argc != 4) {
         print_usage(argv[0]);
