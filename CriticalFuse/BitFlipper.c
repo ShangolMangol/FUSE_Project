@@ -14,6 +14,7 @@ void print_usage(const char *program_name) {
     fprintf(stderr, "  Random mode: %s -r <percentage> <file>\n", program_name);
     fprintf(stderr, "  In normal mode, bytes in [start_offset, end_offset] will be bitwise inverted.\n");
     fprintf(stderr, "  In random mode, <percentage> of the entire file's bytes will be randomly flipped.\n");
+    fprintf(stderr, "  Percentage must be between 0 and 0.001\n");
 }
 
 // Function to flip bits in a buffer
@@ -25,7 +26,7 @@ void flip_bits_in_buffer(unsigned char *buffer, size_t size) {
 
 // Function to randomly flip bits in a buffer based on percentage
 void random_flip_bits_in_buffer(unsigned char *buffer, size_t size, double percentage) {
-    // Calculate how many bytes to flip
+    // Calculate how many bytes to flip (percentage is now in range 0-0.001)
     size_t bytes_to_flip = (size_t)((size * percentage) / 100.0);
     
     // Create an array of indices
@@ -75,8 +76,8 @@ int main(int argc, char *argv[]) {
         
         // Parse percentage
         percentage = strtod(argv[2], NULL);
-        if (percentage < 0.0 || percentage > 100.0) {
-            fprintf(stderr, "Error: Percentage must be between 0 and 100\n");
+        if (percentage < 0.0 || percentage > 0.001) {
+            fprintf(stderr, "Error: Percentage must be between 0 and 0.001\n");
             return 1;
         }
         arg_offset = 3;
