@@ -37,7 +37,7 @@ $(FUSE_TARGET): $(FUSE_OBJS)
 	$(CXX) $(FUSE_OBJS) -o $@ $(LDFLAGS)
 
 $(BITFLIPPER_TARGET): BitFlipper.c
-	$(CC) -o $@ $<
+	$(CC) -o $@ $< -lm
 
 # Compilation rule
 %.o: %.cpp

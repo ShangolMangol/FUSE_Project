@@ -15,7 +15,6 @@ void print_usage(const char *program_name) {
     fprintf(stderr, "  Random mode: %s -r <percentage> <file>\n", program_name);
     fprintf(stderr, "  In normal mode, bytes in [start_offset, end_offset] will be bitwise inverted.\n");
     fprintf(stderr, "  In random mode, <percentage> of the entire file's bytes will be randomly flipped.\n");
-    fprintf(stderr, "  Percentage must be between 0 and 100 with precision of 0.001\n");
 }
 
 // Function to flip bits in a buffer
@@ -27,7 +26,7 @@ void flip_bits_in_buffer(unsigned char *buffer, size_t size) {
 
 // Function to randomly flip bits in a buffer based on percentage
 void random_flip_bits_in_buffer(unsigned char *buffer, size_t size, double percentage) {
-    // Calculate how many bytes to flip (percentage is now in range 0-0.001)
+    // Calculate how many bytes to flip
     size_t bytes_to_flip = (size_t)((size * percentage) / 100.0);
     
     // Create an array of indices
@@ -76,12 +75,13 @@ int main(int argc, char *argv[]) {
         }
         
         // Parse percentage
-        percentage = strtod(argv[2], NULL);
-        if (percentage < 0.0 || percentage > 100.0) {
-            fprintf(stderr, "Error: Percentage must be between 0 and 100\n");
+        char *endptr;
+        percentage = strtod(argv[2], &endptr);
+        if (*endptr != '\0' || percentage < 0.0 || percentage > 100.0) {
+            fprintf(stderr, "Error: Percentage must be between 0 and 100 with up to 3 decimal places\n");
             return 1;
         }
-        // Round to 3 decimal places to ensure precision of 0.001
+        // Round to 3 decimal places to avoid floating point precision issues
         percentage = round(percentage * 1000.0) / 1000.0;
         arg_offset = 3;
     } else if (argc != 4) {
@@ -206,7 +206,7 @@ int main(int argc, char *argv[]) {
     fclose(file);
 
     if (random_mode) {
-        printf("Successfully randomly flipped %.1f%% of bits in the entire file %s\n",
+        printf("Successfully randomly flipped %.3f%% of bits in the entire file %s\n",
                percentage, filename);
     } else {
         printf("Successfully flipped all bits in bytes from offset %ld to %ld in %s\n",
