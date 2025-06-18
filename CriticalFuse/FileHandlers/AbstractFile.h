@@ -69,7 +69,7 @@ public:
      * @param offset offset to read from
      * @return ResultCode SUCCESS if successful, FAILURE otherwise
      */
-    ResultCode readFile(const char* mappingPath, char* buffer, size_t size, off_t offset);
+    virtual ResultCode readFile(const char* mappingPath, char* buffer, size_t size, off_t offset);
 
     /**
      * @brief Writes the given buffer to a file at the given path.
@@ -80,7 +80,7 @@ public:
      * @param offset offset to write to
      * @return ResultCode SUCCESS if successful, FAILURE otherwise
      */
-    ResultCode writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset); 
+    virtual ResultCode writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset); 
 
     /**
      * @brief Create a Mapping for critical data and non-critical data in the file, saved in the map object.

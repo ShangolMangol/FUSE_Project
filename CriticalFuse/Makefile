@@ -11,23 +11,27 @@ COMMON_SRCS = \
     FileHandlers/PngFile.cpp \
     FileHandlers/BmpFile.cpp \
     FileHandlers/JpegFile.cpp \
-    Utilities/Range.cpp
+    Utilities/Range.cpp \
+    Utilities/HuffmanTable.cpp
 
 # Target-specific sources
 HANDLER_SRCS = main.cpp $(COMMON_SRCS)
 FUSE_SRCS = FUSE/CriticalFUSE.cpp $(COMMON_SRCS)
+TEST_SRCS = test_exact_jpeg_parsing.cpp $(COMMON_SRCS)
 
 # Object files
 HANDLER_OBJS = $(HANDLER_SRCS:.cpp=.o)
 FUSE_OBJS = $(FUSE_SRCS:.cpp=.o)
+TEST_OBJS = $(TEST_SRCS:.cpp=.o)
 
 # Executables
 TARGET = HandlerTest
 FUSE_TARGET = CriticalFUSE
 BITFLIPPER_TARGET = BitFlipper
+TEST_TARGET = test_exact_jpeg_parsing
 
 # Default target
-all: $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET)
+all: $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET) $(TEST_TARGET)
 
 # Linking
 $(TARGET): $(HANDLER_OBJS)
@@ -35,6 +39,9 @@ $(TARGET): $(HANDLER_OBJS)
 
 $(FUSE_TARGET): $(FUSE_OBJS)
 	$(CXX) $(FUSE_OBJS) -o $@ $(LDFLAGS)
+
+$(TEST_TARGET): $(TEST_OBJS)
+	$(CXX) $(TEST_OBJS) -o $@ $(LDFLAGS)
 
 $(BITFLIPPER_TARGET): BitFlipper.c
 	$(CC) -o $@ $< -lm
@@ -45,7 +52,7 @@ $(BITFLIPPER_TARGET): BitFlipper.c
 
 # Clean
 clean:
-	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET)
+	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET) $(TEST_OBJS) $(TEST_TARGET)
 
 # Run
 run: $(TARGET)
