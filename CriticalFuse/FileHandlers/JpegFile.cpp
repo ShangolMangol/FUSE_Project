@@ -30,6 +30,7 @@ static std::vector<uint8_t> criticalData;
 static std::vector<int16_t> acCoefficientValues; // Store actual coefficient values
 static std::vector<uint8_t> acCoefficientRawData; // Store raw entropy data
 static size_t originalSize = 0;
+static std::string currentMappingPath; // Store the current mapping path
 
 // Read 16-bit value from JPEG data (JPEG uses big-endian for segment lengths)
 uint16_t readJPEGUint16(const uint8_t* data) {
@@ -309,32 +310,209 @@ std::vector<uint8_t> rebuildJPEGDataExact() {
     return result;
 }
 
+// Rebuild JPEG data by parsing critical data and inserting AC coefficients
+std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& critData, const std::vector<uint8_t>& noncritData) {
+    std::vector<uint8_t> result;
+    result.reserve(critData.size() + noncritData.size());
+    
+    const uint8_t* data = critData.data();
+    size_t size = critData.size();
+    size_t pos = 0;
+    size_t acIndex = 0;
+    
+    // Parse JPEG markers and rebuild with AC coefficients
+    std::map<uint8_t, HuffmanTable> huffmanTables;
+    
+    while (pos + 4 < size) {
+        if (data[pos] != 0xFF) {
+            // Invalid JPEG, copy remaining data and return
+            result.insert(result.end(), data + pos, data + size);
+            break;
+        }
+        
+        uint8_t marker = data[pos + 1];
+        pos += 2;
+        
+        if (marker == EOI_MARKER) {
+            // End of image - copy EOI marker
+            result.insert(result.end(), data + pos - 2, data + pos);
+            break;
+        }
+        
+        if (marker == SOS_MARKER) {
+            // Start of scan - copy SOS header and decode scan data
+            if (pos + 2 > size) break;
+            
+            uint16_t sosLength = readJPEGUint16(data + pos);
+            if (pos + sosLength > size) break;
+            
+            // Copy SOS header
+            result.insert(result.end(), data + pos - 2, data + pos + sosLength);
+            pos += sosLength;
+            
+            // Now we need to decode the scan data to find where to insert AC coefficients
+            // The scan data after SOS header contains DC and AC coefficients
+            // We need to parse this to separate DC (critical) from AC (non-critical)
+            
+            // Find the end of scan data (before EOI marker)
+            size_t scanStart = pos;
+            size_t scanEnd = size;
+            
+            // Look for EOI marker or next marker
+            for (size_t i = pos; i < size - 1; i++) {
+                if (data[i] == 0xFF && data[i + 1] != 0x00) {
+                    scanEnd = i;
+                    break;
+                }
+            }
+            
+            // For now, we'll use a simple approach: assume first 1/8 of scan data is DC coefficients
+            // and the rest are AC coefficients
+            size_t scanSize = scanEnd - scanStart;
+            if (scanSize > 0) {
+                size_t dcSize = scanSize / 8; // Assume 1/8 is DC coefficients
+                if (dcSize == 0) dcSize = 1;
+                
+                // Copy DC coefficients (first part of scan data)
+                result.insert(result.end(), data + scanStart, data + scanStart + dcSize);
+                
+                // Insert AC coefficients from noncrit file
+                if (acIndex < noncritData.size()) {
+                    result.insert(result.end(), noncritData.begin() + acIndex, noncritData.end());
+                    acIndex = noncritData.size(); // Mark as consumed
+                }
+            }
+            
+            // Copy any remaining data (EOI marker, etc.)
+            if (scanEnd < size) {
+                result.insert(result.end(), data + scanEnd, data + size);
+            }
+            break;
+        }
+        
+        if (marker == DHT_MARKER) {
+            // Define Huffman Table - copy as is
+            if (pos + 2 > size) break;
+            
+            uint16_t dhtLength = readJPEGUint16(data + pos);
+            if (pos + dhtLength > size) break;
+            
+            result.insert(result.end(), data + pos - 2, data + pos + dhtLength);
+            pos += dhtLength;
+            continue;
+        }
+        
+        // Other markers - copy as is
+        if (pos + 2 > size) break;
+        uint16_t segmentLength = readJPEGUint16(data + pos);
+        if (pos + segmentLength > size) break;
+        
+        result.insert(result.end(), data + pos - 2, data + pos + segmentLength);
+        pos += segmentLength;
+    }
+    
+    return result;
+}
+
 ResultCode JpegFileHandler::createMapping(const char* buffer, size_t size) {
     
     return ResultCode::SUCCESS;
 }
 
 ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size_t size, off_t offset) {
-    // Rebuild the original JPEG data with exact coefficient placement
-    std::vector<uint8_t> rebuiltData = rebuildJPEGDataExact();
+    // Remove .mapping suffix from the path
+    std::string basePath(mappingPath);
+    const std::string mappingSuffix = ".mapping";
+    if (basePath.size() > mappingSuffix.size() && 
+        basePath.substr(basePath.size() - mappingSuffix.size()) == mappingSuffix) {
+        basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
+    }
+    
+    // Read critical data from .crit file
+    std::string critPath = basePath + ".crit";
+    std::ifstream critFile(critPath, std::ios::binary);
+    if (!critFile.is_open()) {
+        std::cerr << "Failed to open critical file: " << critPath << std::endl;
+        return ResultCode::FAILURE;
+    }
+    
+    std::vector<uint8_t> critData((std::istreambuf_iterator<char>(critFile)), {});
+    critFile.close();
+    
+    // Read AC coefficient data from .noncrit file
+    std::string noncritPath = basePath + ".noncrit";
+    std::ifstream noncritFile(noncritPath, std::ios::binary);
+    if (!noncritFile.is_open()) {
+        std::cerr << "Failed to open non-critical file: " << noncritPath << std::endl;
+        return ResultCode::FAILURE;
+    }
+    
+    std::vector<uint8_t> noncritData((std::istreambuf_iterator<char>(noncritFile)), {});
+    noncritFile.close();
+    
+    // Rebuild the original JPEG data by parsing critical data and inserting AC coefficients
+    std::vector<uint8_t> result = rebuildJPEGFromCriticalData(critData, noncritData);
     
     // Copy the requested portion
-    if (offset + size <= rebuiltData.size()) {
-        std::memcpy(buffer, rebuiltData.data() + offset, size);
+    if (offset + size <= result.size()) {
+        std::memcpy(buffer, result.data() + offset, size);
         return ResultCode::SUCCESS;
     } else {
+        std::cerr << "Requested range exceeds file size" << std::endl;
         return ResultCode::FAILURE;
     }
 }
 
 ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
+    // Remove .mapping suffix from the path
+    std::string basePath(mappingPath);
+    const std::string mappingSuffix = ".mapping";
+    if (basePath.size() > mappingSuffix.size() && 
+        basePath.substr(basePath.size() - mappingSuffix.size()) == mappingSuffix) {
+        basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
+    }
+    
     // For write operations, re-parse the entire file
     if (offset == 0) {
         // Full file write
         splitACCoefficientsExact(buffer, size);
+        
+        // Write updated critical data to .crit file
+        std::string critPath = basePath + ".crit";
+        std::ofstream critFile(critPath, std::ios::binary);
+        if (critFile.is_open()) {
+            critFile.write(reinterpret_cast<const char*>(criticalData.data()), criticalData.size());
+            critFile.close();
+        }
+        
+        // Write updated AC coefficient data to .noncrit file
+        std::string noncritPath = basePath + ".noncrit";
+        std::ofstream noncritFile(noncritPath, std::ios::binary);
+        if (noncritFile.is_open()) {
+            noncritFile.write(reinterpret_cast<const char*>(acCoefficientRawData.data()), acCoefficientRawData.size());
+            noncritFile.close();
+        }
     } else {
-        // Partial write - rebuild current data first
-        std::vector<uint8_t> currentData = rebuildJPEGDataExact();
+        // Partial write - this is more complex and would require rebuilding the entire file
+        // For now, we'll re-parse the entire file
+        std::vector<uint8_t> currentData;
+        
+        // Read existing data
+        std::string critPath = basePath + ".crit";
+        std::ifstream critFile(critPath, std::ios::binary);
+        if (critFile.is_open()) {
+            std::vector<uint8_t> critData((std::istreambuf_iterator<char>(critFile)), {});
+            currentData.insert(currentData.end(), critData.begin(), critData.end());
+            critFile.close();
+        }
+        
+        std::string noncritPath = basePath + ".noncrit";
+        std::ifstream noncritFile(noncritPath, std::ios::binary);
+        if (noncritFile.is_open()) {
+            std::vector<uint8_t> noncritData((std::istreambuf_iterator<char>(noncritFile)), {});
+            currentData.insert(currentData.end(), noncritData.begin(), noncritData.end());
+            noncritFile.close();
+        }
         
         // Ensure we have enough space
         if (offset + size > currentData.size()) {
@@ -346,6 +524,19 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         
         // Re-parse the data
         splitACCoefficientsExact(reinterpret_cast<const char*>(currentData.data()), currentData.size());
+        
+        // Write updated files
+        std::ofstream critFileOut(critPath, std::ios::binary);
+        if (critFileOut.is_open()) {
+            critFileOut.write(reinterpret_cast<const char*>(criticalData.data()), criticalData.size());
+            critFileOut.close();
+        }
+        
+        std::ofstream noncritFileOut(noncritPath, std::ios::binary);
+        if (noncritFileOut.is_open()) {
+            noncritFileOut.write(reinterpret_cast<const char*>(acCoefficientRawData.data()), acCoefficientRawData.size());
+            noncritFileOut.close();
+        }
     }
     
     return ResultCode::SUCCESS;
