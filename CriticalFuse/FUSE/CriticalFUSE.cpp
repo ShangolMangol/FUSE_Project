@@ -118,6 +118,7 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
             return -ENOENT;
         }
         if (handler->loadMapFromFile(mappingPath.c_str()) != ResultCode::SUCCESS) {
+            std::cerr << "Failed to load mapping from file: " << mappingPath << std::endl;
             return -errno;
         }
 
@@ -279,10 +280,12 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
         std::string mappingPath = std::string(fpath) + ".mapping";
         if (handler->createMapping("", 0) != ResultCode::SUCCESS) {
             unlink(fpath); // Clean up the created file
+            std::cerr << "Failed to create mapping for file: " << path << std::endl;
             return -errno;
         }
         if (handler->saveMapToFile(mappingPath.c_str()) != ResultCode::SUCCESS) {
             unlink(fpath); // Clean up the created file
+            std::cerr << "Failed to save mapping file: " << mappingPath << std::endl;
             return -errno;
         }
         std::cout << "Created mapping file: " << mappingPath << std::endl;
