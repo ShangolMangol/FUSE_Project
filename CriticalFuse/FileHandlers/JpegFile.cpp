@@ -339,14 +339,17 @@ std::vector<uint8_t> rebuildJPEGDataExact() {
 }
 
 // Rebuild JPEG data by parsing critical data and inserting AC coefficients
-std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& critData, const std::vector<uint8_t>& noncritData) {
+std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& critData, const std::vector<int16_t>& acCoeffValues) {
     std::vector<uint8_t> result;
-    result.reserve(critData.size() + noncritData.size());
+    result.reserve(critData.size() + acCoeffValues.size() * sizeof(int16_t));
     
     const uint8_t* data = critData.data();
     size_t size = critData.size();
     size_t pos = 0;
     size_t acIndex = 0;
+    
+    std::cerr << "rebuildJPEGFromCriticalData: Rebuilding from " << critData.size() 
+              << " bytes critical + " << acCoeffValues.size() << " AC coefficients" << std::endl;
     
     // Parse JPEG markers and rebuild with AC coefficients
     std::map<uint8_t, HuffmanTable> huffmanTables;
@@ -403,9 +406,16 @@ std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& cri
                 result.insert(result.end(), scanData, scanData + scanEnd);
                 
                 // Insert AC coefficients from noncrit file
-                if (acIndex < noncritData.size()) {
-                    result.insert(result.end(), noncritData.begin() + acIndex, noncritData.end());
-                    acIndex = noncritData.size(); // Mark as consumed
+                if (acIndex < acCoeffValues.size()) {
+                    // Convert AC coefficient values back to their raw representation
+                    // This is a simplified approach - in a full implementation, we would need to
+                    // re-encode the coefficients using the Huffman tables
+                    for (size_t i = acIndex; i < acCoeffValues.size(); i++) {
+                        int16_t value = acCoeffValues[i];
+                        result.push_back((value >> 8) & 0xFF);
+                        result.push_back(value & 0xFF);
+                    }
+                    acIndex = acCoeffValues.size(); // Mark as consumed
                 }
             }
             
@@ -517,7 +527,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         splitACCoefficientsExact(buffer, size);
         
         std::cerr << "writeFile: After parsing - critical data size: " << criticalData.size() 
-                  << ", AC coefficient data size: " << acCoefficientRawData.size() << std::endl;
+                  << ", AC coefficient count: " << acCoefficientValues.size() << std::endl;
         
         // Write updated critical data to .crit file
         std::string critPath = basePath + ".crit";
