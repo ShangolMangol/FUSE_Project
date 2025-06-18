@@ -209,7 +209,7 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
                                       entropyData + (ac.byteStart - baseOffset) + acDataSize);
         }
         
-        //blockCount++;
+        blockCount++;
     }
     
     return true;
