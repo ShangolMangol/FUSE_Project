@@ -310,19 +310,6 @@ std::vector<uint8_t> rebuildJPEGDataExact() {
 }
 
 ResultCode JpegFileHandler::createMapping(const char* buffer, size_t size) {
-    if (size == 0) {
-        return ResultCode::SUCCESS;
-    }
-    
-    if (size < 2 || static_cast<uint8_t>(buffer[0]) != 0xFF || static_cast<uint8_t>(buffer[1]) != SOI_MARKER) {
-        return ResultCode::FAILURE;
-    }
-
-    // Use exact parsing to split AC coefficients
-    splitACCoefficientsExact(buffer, size);
-    
-    // Create simple mapping (we handle exact separation internally)
-    addToFileMap(0, size - 1, 0, size - 1, CriticalType::CRITICAL_DATA);
     
     return ResultCode::SUCCESS;
 }
