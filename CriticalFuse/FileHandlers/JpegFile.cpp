@@ -44,6 +44,8 @@ bool parseDHT(const uint8_t* data, size_t length, std::map<uint8_t, HuffmanTable
     uint16_t dhtLength = readJPEGUint16(data);
     if (dhtLength < 3 || dhtLength > length) return false;
     
+    std::cerr << "parseDHT: Parsing DHT segment of length " << dhtLength << std::endl;
+    
     size_t pos = 2;
     while (pos < dhtLength) {
         if (pos + 1 >= dhtLength) break;
@@ -53,22 +55,28 @@ bool parseDHT(const uint8_t* data, size_t length, std::map<uint8_t, HuffmanTable
         uint8_t tableId = tableInfo & 0x0F;
         uint8_t tableKey = (tableClass << 4) | tableId;
         
+        std::cerr << "parseDHT: Found table " << (int)tableId << " (class " << (tableClass == 0 ? "DC" : "AC") << ")" << std::endl;
+        
         pos++;
         
         HuffmanTable table;
-        if (!table.parse(data + pos, dhtLength - pos)) return false;
+        if (!table.parse(data + pos - 1, dhtLength - pos + 1)) {
+            std::cerr << "parseDHT: Failed to parse table " << (int)tableId << std::endl;
+            return false;
+        }
         tables[tableKey] = table;
         
-        // Calculate how much data was consumed
+        // Calculate how much data was consumed by the table
         uint8_t codeLengths[16];
-        std::memcpy(codeLengths, data + pos, 16);
-        pos += 16;
+        std::memcpy(codeLengths, data + pos, 16); // pos is after table info byte
         
         int totalSymbols = 0;
         for (int i = 0; i < 16; i++) {
             totalSymbols += codeLengths[i];
         }
-        pos += totalSymbols;
+        pos += 16 + totalSymbols; // code lengths + symbols
+        
+        std::cerr << "parseDHT: Table " << (int)tableId << " has " << totalSymbols << " symbols" << std::endl;
     }
     
     return true;
@@ -78,6 +86,8 @@ bool parseDHT(const uint8_t* data, size_t length, std::map<uint8_t, HuffmanTable
 bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffset, 
                            const std::map<uint8_t, HuffmanTable>& tables) {
     if (length < 2) return false;
+
+    std::cerr << "parseSOSAndCoefficients: Parsing SOS and coefficients" << std::endl;
     
     uint16_t sosLength = readJPEGUint16(data);
     if (sosLength < 2 || sosLength > length) return false;
@@ -103,11 +113,21 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
         
         componentToDCTable[componentId] = dcTableId;
         componentToACTable[componentId] = acTableId;
+        
+        std::cerr << "parseSOSAndCoefficients: Component " << (int)componentId 
+                  << " uses DC table " << (int)dcTableId << " and AC table " << (int)acTableId << std::endl;
     }
     
     // Find the Huffman tables we need
     HuffmanTable dcTable, acTable;
     bool dcTableFound = false, acTableFound = false;
+    
+    std::cerr << "parseSOSAndCoefficients: Available Huffman tables:" << std::endl;
+    for (const auto& pair : tables) {
+        uint8_t tableClass = (pair.first >> 4) & 0x0F;
+        uint8_t tableId = pair.first & 0x0F;
+        std::cerr << "  Table " << (int)tableId << " (class " << (tableClass == 0 ? "DC" : "AC") << ")" << std::endl;
+    }
     
     for (const auto& pair : tables) {
         uint8_t tableClass = (pair.first >> 4) & 0x0F;
@@ -118,6 +138,7 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
             if (tableClass == 0 && tableId == compPair.second) { // DC table
                 dcTable = pair.second;
                 dcTableFound = true;
+                std::cerr << "parseSOSAndCoefficients: Found DC table " << (int)tableId << std::endl;
             }
         }
         
@@ -125,6 +146,7 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
             if (tableClass == 1 && tableId == compPair.second) { // AC table
                 acTable = pair.second;
                 acTableFound = true;
+                std::cerr << "parseSOSAndCoefficients: Found AC table " << (int)tableId << std::endl;
             }
         }
     }
@@ -152,10 +174,15 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
     // JPEG uses MSB-first bit reading (big endian bit order)
     BitReader reader(entropyData, entropyLength, true); // true = MSB-first
     
-    size_t blockCount = 0;
+    std::cerr << "parseSOSAndCoefficients: Starting coefficient decoding with " << entropyLength << " bytes of entropy data" << std::endl;
     
-    while (!reader.eof()) {
+    size_t blockCount = 0;
+    size_t maxBlocks = 100000; // Safety limit to prevent infinite loops
+    
+    while (!reader.eof() && blockCount < maxBlocks) {
         size_t posBefore = reader.getByteOffset();
+        
+        std::cerr << "parseSOSAndCoefficients: Processing block " << blockCount << " at byte offset " << posBefore << std::endl;
         
         // Each 8x8 block has 1 DC + 63 AC coefficients
         // For DC coefficient (first in block)
@@ -166,12 +193,18 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
             
             // Decode DC coefficient using DC table
             int symbol = dcTable.decodeSymbol(reader);
-            if (symbol < 0) break;
+            if (symbol < 0) {
+                std::cerr << "parseSOSAndCoefficients: Failed to decode DC symbol at block " << blockCount << std::endl;
+                break;
+            }
             
             dc.sizeBits = symbol & 0x0F;
             if (dc.sizeBits > 0) {
                 uint32_t amplitude;
-                if (!reader.readBits(amplitude, dc.sizeBits)) break;
+                if (!reader.readBits(amplitude, dc.sizeBits)) {
+                    std::cerr << "parseSOSAndCoefficients: Failed to read DC amplitude at block " << blockCount << std::endl;
+                    break;
+                }
                 dc.value = static_cast<int16_t>(amplitude);
             } else {
                 dc.value = 0;
@@ -179,6 +212,16 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
             
             dc.byteEnd = baseOffset + reader.getByteOffset() - 1;
             exactCoefficients.push_back(dc);
+            
+            // Store DC coefficient raw data in critical data
+            size_t dcDataSize = dc.byteEnd - dc.byteStart + 1;
+            if (dc.byteStart >= baseOffset && dc.byteEnd >= dc.byteStart && 
+                (dc.byteStart - baseOffset + dcDataSize) <= entropyLength) {
+                criticalData.insert(criticalData.end(), 
+                                  entropyData + (dc.byteStart - baseOffset), 
+                                  entropyData + (dc.byteStart - baseOffset) + dcDataSize);
+            }
+            
         } else {
             // AC coefficient
             ExactCoefficient ac;
@@ -187,7 +230,10 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
             
             // Decode AC coefficient using AC table
             int symbol = acTable.decodeSymbol(reader);
-            if (symbol < 0) break;
+            if (symbol < 0) {
+                std::cerr << "parseSOSAndCoefficients: Failed to decode AC symbol at block " << blockCount << std::endl;
+                break;
+            }
             
             if (symbol == 0x00) {
                 // End of block
@@ -200,7 +246,10 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
                 
                 if (ac.sizeBits > 0) {
                     uint32_t amplitude;
-                    if (!reader.readBits(amplitude, ac.sizeBits)) break;
+                    if (!reader.readBits(amplitude, ac.sizeBits)) {
+                        std::cerr << "parseSOSAndCoefficients: Failed to read AC amplitude at block " << blockCount << std::endl;
+                        break;
+                    }
                     ac.value = static_cast<int16_t>(amplitude);
                 } else {
                     ac.value = 0;
@@ -210,18 +259,27 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
             ac.byteEnd = baseOffset + reader.getByteOffset() - 1;
             exactCoefficients.push_back(ac);
             
-            // Store AC coefficient value and raw data
+            // Store AC coefficient value (this goes to .noncrit file)
             acCoefficientValues.push_back(ac.value);
             
-            // Store raw entropy data for this coefficient
+            // Store AC coefficient raw data (this goes to .noncrit file)
             size_t acDataSize = ac.byteEnd - ac.byteStart + 1;
-            acCoefficientRawData.insert(acCoefficientRawData.end(), 
-                                      entropyData + (ac.byteStart - baseOffset), 
-                                      entropyData + (ac.byteStart - baseOffset) + acDataSize);
+            if (ac.byteStart >= baseOffset && ac.byteEnd >= ac.byteStart && 
+                (ac.byteStart - baseOffset + acDataSize) <= entropyLength) {
+                acCoefficientRawData.insert(acCoefficientRawData.end(), 
+                                          entropyData + (ac.byteStart - baseOffset), 
+                                          entropyData + (ac.byteStart - baseOffset) + acDataSize);
+            }
         }
         
         blockCount++;
+        
+        if (blockCount % 1000 == 0) {
+            std::cerr << "parseSOSAndCoefficients: Processed " << blockCount << " blocks" << std::endl;
+        }
     }
+    
+    std::cerr << "parseSOSAndCoefficients: Finished decoding " << blockCount << " blocks" << std::endl;
     
     return true;
 }
@@ -243,73 +301,130 @@ void splitACCoefficientsExact(const char* buffer, size_t size) {
     // Parse JPEG markers and build Huffman tables
     std::map<uint8_t, HuffmanTable> huffmanTables;
     
-    // Add some debugging
     std::cerr << "splitACCoefficientsExact: Processing " << size << " bytes" << std::endl;
     
-    while (pos + 4 < size) {
-        if (data[pos] != 0xFF) {
-            std::cerr << "splitACCoefficientsExact: Invalid JPEG marker at position " << pos 
-                      << " (expected 0xFF, got 0x" << std::hex << (int)data[pos] << std::dec << ")" << std::endl;
-            // Instead of returning, try to find the next valid marker
-            // Copy current data as critical and continue searching
-            criticalData.insert(criticalData.end(), data + pos, data + pos + 1);
+    // First, seek to SOI marker (Start of Image)
+    while (pos + 1 < size && !(data[pos] == 0xFF && data[pos + 1] == SOI_MARKER)) {
+        pos++;
+    }
+    
+    if (pos + 1 >= size) {
+        std::cerr << "splitACCoefficientsExact: SOI marker not found" << std::endl;
+        return;
+    }
+    
+    // Copy SOI marker to critical data
+    criticalData.push_back(data[pos]);
+    criticalData.push_back(data[pos + 1]);
+    pos += 2;
+    
+    std::cerr << "splitACCoefficientsExact: Found SOI marker at position " << (pos - 2) << std::endl;
+    
+    // Now parse all segments until we find SOS (Start of Scan)
+    while (pos + 1 < size) {
+        // Seek to next marker (0xFF)
+        while (pos + 1 < size && data[pos] != 0xFF) {
+            pos++;
+        }
+        
+        if (pos + 1 >= size) {
+            std::cerr << "splitACCoefficientsExact: No more markers found" << std::endl;
+            break;
+        }
+        
+        // Check if this is a marker (0xFF followed by non-zero)
+        if (data[pos + 1] == 0x00) {
+            // This is a stuffed 0xFF in entropy-coded data, skip it
             pos++;
             continue;
         }
         
         uint8_t marker = data[pos + 1];
-        pos += 2;
-        
-        std::cerr << "splitACCoefficientsExact: Found marker 0x" << std::hex << (int)marker << std::dec << std::endl;
-        
-        if (marker == EOI_MARKER) {
-            // End of image
-            criticalData.insert(criticalData.end(), data + pos - 2, data + pos);
-            std::cerr << "splitACCoefficientsExact: Found EOI marker" << std::endl;
-            break;
-        }
+        std::cerr << "splitACCoefficientsExact: Found marker 0x" << std::hex << (int)marker << std::dec << " at position " << pos << std::endl;
         
         if (marker == SOS_MARKER) {
-            // Start of scan - decode coefficients
-            std::cerr << "splitACCoefficientsExact: Found SOS marker" << std::endl;
+            // Start of Scan - this is where the AC/DC coefficients are
+            std::cerr << "splitACCoefficientsExact: Found SOS marker - parsing coefficients" << std::endl;
+            
             if (pos + 2 > size) return;
             
-            uint16_t sosLength = readJPEGUint16(data + pos);
-            if (pos + sosLength > size) return;
+            uint16_t sosLength = readJPEGUint16(data + pos + 2);
+            if (pos + 2 + sosLength > size) return;
             
-            parseSOSAndCoefficients(data + pos, sosLength, pos, huffmanTables);
+            // Parse the scan data (entropy-coded data containing AC/DC coefficients)
+            size_t scanDataStart = pos + 2 + sosLength;
+            size_t scanDataEnd = size;
+            
+            // Find the end of scan data (look for EOI marker or next marker)
+            for (size_t i = scanDataStart; i + 1 < size; i++) {
+                if (data[i] == 0xFF && data[i + 1] != 0x00) {
+                    scanDataEnd = i;
+                    break;
+                }
+            }
+            
+            std::cerr << "splitACCoefficientsExact: Scan data from " << scanDataStart << " to " << scanDataEnd 
+                      << " (length: " << (scanDataEnd - scanDataStart) << " bytes)" << std::endl;
+            
+            // Parse the scan data to extract AC/DC coefficients
+            if (scanDataEnd > scanDataStart) {
+                // Create a buffer that includes the SOS header + scan data
+                std::vector<uint8_t> sosAndScanData;
+                sosAndScanData.insert(sosAndScanData.end(), data + pos + 2, data + pos + 2 + sosLength); // SOS header
+                sosAndScanData.insert(sosAndScanData.end(), data + scanDataStart, data + scanDataEnd); // Scan data
+                
+                // Pass the complete SOS segment to parseSOSAndCoefficients
+                parseSOSAndCoefficients(sosAndScanData.data(), sosAndScanData.size(), scanDataStart, huffmanTables);
+                
+                // The parseSOSAndCoefficients function will:
+                // 1. Extract AC coefficient values and store them in acCoefficientValues (goes to .noncrit)
+                // 2. Extract DC coefficient data and add it to criticalData (goes to .crit)
+                // 3. Extract AC coefficient raw data and store it in acCoefficientRawData (goes to .noncrit)
+            }
+            
+            // Copy any remaining data (EOI marker, etc.) to critical data
+            if (scanDataEnd < size) {
+                criticalData.insert(criticalData.end(), data + scanDataEnd, data + size);
+            }
             break;
-        }
-        
-        if (marker == DHT_MARKER) {
+            
+        } else if (marker == EOI_MARKER) {
+            // End of Image
+            std::cerr << "splitACCoefficientsExact: Found EOI marker" << std::endl;
+            criticalData.push_back(data[pos]);
+            criticalData.push_back(data[pos + 1]);
+            break;
+            
+        } else if (marker == DHT_MARKER) {
             // Define Huffman Table
             std::cerr << "splitACCoefficientsExact: Found DHT marker" << std::endl;
             if (pos + 2 > size) return;
             
-            uint16_t dhtLength = readJPEGUint16(data + pos);
-            if (pos + dhtLength > size) return;
+            uint16_t dhtLength = readJPEGUint16(data + pos + 2);
+            if (pos + 2 + dhtLength > size) return;
             
             // Copy DHT to critical data
-            criticalData.insert(criticalData.end(), data + pos - 2, data + pos + dhtLength);
+            criticalData.insert(criticalData.end(), data + pos, data + pos + 2 + dhtLength);
             
             // Parse Huffman table
-            parseDHT(data + pos + 2, dhtLength - 2, huffmanTables);
-            pos += dhtLength;
-            continue;
+            parseDHT(data + pos + 2, dhtLength, huffmanTables);
+            pos += 2 + dhtLength;
+            
+        } else {
+            // Other markers - copy to critical data
+            std::cerr << "splitACCoefficientsExact: Found other marker 0x" << std::hex << (int)marker << std::dec << std::endl;
+            if (pos + 2 > size) return;
+            
+            uint16_t segmentLength = readJPEGUint16(data + pos + 2);
+            if (pos + 2 + segmentLength > size) return;
+            
+            criticalData.insert(criticalData.end(), data + pos, data + pos + 2 + segmentLength);
+            pos += 2 + segmentLength;
         }
-        
-        // Other markers - copy to critical data
-        std::cerr << "splitACCoefficientsExact: Found other marker 0x" << std::hex << (int)marker << std::dec << std::endl;
-        if (pos + 2 > size) return;
-        uint16_t segmentLength = readJPEGUint16(data + pos);
-        if (pos + segmentLength > size) return;
-        
-        criticalData.insert(criticalData.end(), data + pos - 2, data + pos + segmentLength);
-        pos += segmentLength;
     }
     
     std::cerr << "splitACCoefficientsExact: Finished. Critical data size: " << criticalData.size() 
-              << ", AC coefficient data size: " << acCoefficientRawData.size() << std::endl;
+              << ", AC coefficient count: " << acCoefficientValues.size() << std::endl;
 }
 
 // Rebuild JPEG data with exact coefficient placement
@@ -354,97 +469,98 @@ std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& cri
     // Parse JPEG markers and rebuild with AC coefficients
     std::map<uint8_t, HuffmanTable> huffmanTables;
     
-    while (pos + 4 < size) {
-        if (data[pos] != 0xFF) {
-            // Invalid JPEG, copy remaining data and return
-            result.insert(result.end(), data + pos, data + size);
-            break;
-        }
-        
-        uint8_t marker = data[pos + 1];
-        pos += 2;
-        
-        if (marker == EOI_MARKER) {
-            // End of image - copy EOI marker
-            result.insert(result.end(), data + pos - 2, data + pos);
-            break;
-        }
-        
-        if (marker == SOS_MARKER) {
-            // Start of scan - copy SOS header and decode scan data exactly
-            if (pos + 2 > size) break;
+    while (pos + 2 < size) {
+        // Look for JPEG markers (0xFF followed by non-zero byte)
+        if (data[pos] == 0xFF && data[pos + 1] != 0x00) {
+            uint8_t marker = data[pos + 1];
+            pos += 2;
             
-            uint16_t sosLength = readJPEGUint16(data + pos);
-            if (pos + sosLength > size) break;
-            
-            // Copy SOS header
-            result.insert(result.end(), data + pos - 2, data + pos + sosLength);
-            pos += sosLength;
-            
-            // Now we need to decode the scan data exactly to find where to insert AC coefficients
-            // Parse the scan data using the same logic as in parseSOSAndCoefficients
-            const uint8_t* scanData = data + pos;
-            size_t scanDataSize = size - pos;
-            
-            // Find the end of scan data (before EOI marker)
-            size_t scanEnd = scanDataSize;
-            for (size_t i = 0; i < scanDataSize - 1; i++) {
-                if (scanData[i] == 0xFF && scanData[i + 1] != 0x00) {
-                    scanEnd = i;
-                    break;
-                }
+            if (marker == EOI_MARKER) {
+                // End of image - copy EOI marker
+                result.insert(result.end(), data + pos - 2, data + pos);
+                break;
             }
             
-            // Parse the scan data exactly to separate DC and AC coefficients
-            // We need to decode the Huffman-coded data to find exact positions
-            if (scanEnd > 0) {
-                // For now, we'll use a more sophisticated approach:
-                // Parse the scan data to find DC coefficients and insert AC coefficients at the right positions
+            if (marker == SOS_MARKER) {
+                // Start of scan - copy SOS header and decode scan data exactly
+                if (pos + 2 > size) break;
                 
-                // Copy the scan data as-is for now (this is a simplified approach)
-                // In a full implementation, we would decode the Huffman data to find exact positions
-                result.insert(result.end(), scanData, scanData + scanEnd);
+                uint16_t sosLength = readJPEGUint16(data + pos);
+                if (pos + sosLength > size) break;
                 
-                // Insert AC coefficients from noncrit file
-                if (acIndex < acCoeffValues.size()) {
-                    // Convert AC coefficient values back to their raw representation
-                    // This is a simplified approach - in a full implementation, we would need to
-                    // re-encode the coefficients using the Huffman tables
-                    for (size_t i = acIndex; i < acCoeffValues.size(); i++) {
-                        int16_t value = acCoeffValues[i];
-                        result.push_back((value >> 8) & 0xFF);
-                        result.push_back(value & 0xFF);
+                // Copy SOS header
+                result.insert(result.end(), data + pos - 2, data + pos + sosLength);
+                pos += sosLength;
+                
+                // Now we need to decode the scan data exactly to find where to insert AC coefficients
+                // Parse the scan data using the same logic as in parseSOSAndCoefficients
+                const uint8_t* scanData = data + pos;
+                size_t scanDataSize = size - pos;
+                
+                // Find the end of scan data (before EOI marker)
+                size_t scanEnd = scanDataSize;
+                for (size_t i = 0; i < scanDataSize - 1; i++) {
+                    if (scanData[i] == 0xFF && scanData[i + 1] != 0x00) {
+                        scanEnd = i;
+                        break;
                     }
-                    acIndex = acCoeffValues.size(); // Mark as consumed
                 }
+                
+                // Parse the scan data exactly to separate DC and AC coefficients
+                // We need to decode the Huffman-coded data to find exact positions
+                if (scanEnd > 0) {
+                    // For now, we'll use a more sophisticated approach:
+                    // Parse the scan data to find DC coefficients and insert AC coefficients at the right positions
+                    
+                    // Copy the scan data as-is for now (this is a simplified approach)
+                    // In a full implementation, we would decode the Huffman data to find exact positions
+                    result.insert(result.end(), scanData, scanData + scanEnd);
+                    
+                    // Insert AC coefficients from noncrit file
+                    if (acIndex < acCoeffValues.size()) {
+                        // Convert AC coefficient values back to their raw representation
+                        // This is a simplified approach - in a full implementation, we would need to
+                        // re-encode the coefficients using the Huffman tables
+                        for (size_t i = acIndex; i < acCoeffValues.size(); i++) {
+                            int16_t value = acCoeffValues[i];
+                            result.push_back((value >> 8) & 0xFF);
+                            result.push_back(value & 0xFF);
+                        }
+                        acIndex = acCoeffValues.size(); // Mark as consumed
+                    }
+                }
+                
+                // Copy any remaining data (EOI marker, etc.)
+                if (pos + scanEnd < size) {
+                    result.insert(result.end(), data + pos + scanEnd, data + size);
+                }
+                break;
             }
             
-            // Copy any remaining data (EOI marker, etc.)
-            if (pos + scanEnd < size) {
-                result.insert(result.end(), data + pos + scanEnd, data + size);
+            if (marker == DHT_MARKER) {
+                // Define Huffman Table - copy as is
+                if (pos + 2 > size) break;
+                
+                uint16_t dhtLength = readJPEGUint16(data + pos);
+                if (pos + dhtLength > size) break;
+                
+                result.insert(result.end(), data + pos - 2, data + pos + dhtLength);
+                pos += dhtLength;
+                continue;
             }
-            break;
-        }
-        
-        if (marker == DHT_MARKER) {
-            // Define Huffman Table - copy as is
+            
+            // Other markers - copy as is
             if (pos + 2 > size) break;
+            uint16_t segmentLength = readJPEGUint16(data + pos);
+            if (pos + segmentLength > size) break;
             
-            uint16_t dhtLength = readJPEGUint16(data + pos);
-            if (pos + dhtLength > size) break;
-            
-            result.insert(result.end(), data + pos - 2, data + pos + dhtLength);
-            pos += dhtLength;
-            continue;
+            result.insert(result.end(), data + pos - 2, data + pos + segmentLength);
+            pos += segmentLength;
+        } else {
+            // Not a marker - copy data as is
+            result.push_back(data[pos]);
+            pos++;
         }
-        
-        // Other markers - copy as is
-        if (pos + 2 > size) break;
-        uint16_t segmentLength = readJPEGUint16(data + pos);
-        if (pos + segmentLength > size) break;
-        
-        result.insert(result.end(), data + pos - 2, data + pos + segmentLength);
-        pos += segmentLength;
     }
     
     return result;
