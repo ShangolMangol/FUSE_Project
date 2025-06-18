@@ -136,7 +136,18 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
     
     // Start decoding entropy-coded data
     const uint8_t* entropyData = data + sosLength;
-    size_t entropyLength = length - sosLength;
+    size_t entropyLength = 0;
+
+    // Find next marker (0xFF followed by a non-zero byte)
+    for (size_t i = sosLength; i + 1 < length; ++i) {
+        if (data[i] == 0xFF && data[i + 1] != 0x00) {
+            entropyLength = i - sosLength;
+            break;
+        }
+    }
+    if (entropyLength == 0) {
+        entropyLength = length - sosLength; // Last segment, no marker found
+    }
     
     // JPEG uses MSB-first bit reading (big endian bit order)
     BitReader reader(entropyData, entropyLength, true); // true = MSB-first
