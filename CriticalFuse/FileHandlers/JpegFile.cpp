@@ -142,9 +142,8 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
     BitReader reader(entropyData, entropyLength, true); // true = MSB-first
     
     size_t blockCount = 0;
-    const size_t maxBlocks = 10000; // Safety limit
     
-    while (!reader.eof() && blockCount < maxBlocks) {
+    while (!reader.eof()) {
         size_t posBefore = reader.getByteOffset();
         
         // Each 8x8 block has 1 DC + 63 AC coefficients
@@ -210,7 +209,7 @@ bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffs
                                       entropyData + (ac.byteStart - baseOffset) + acDataSize);
         }
         
-        blockCount++;
+        //blockCount++;
     }
     
     return true;
@@ -233,22 +232,33 @@ void splitACCoefficientsExact(const char* buffer, size_t size) {
     // Parse JPEG markers and build Huffman tables
     std::map<uint8_t, HuffmanTable> huffmanTables;
     
+    // Add some debugging
+    std::cerr << "splitACCoefficientsExact: Processing " << size << " bytes" << std::endl;
+    
     while (pos + 4 < size) {
         if (data[pos] != 0xFF) {
-            return; // Invalid JPEG
+            std::cerr << "splitACCoefficientsExact: Invalid JPEG marker at position " << pos 
+                      << " (expected 0xFF, got 0x" << std::hex << (int)data[pos] << std::dec << ")" << std::endl;
+            // Instead of returning, try to continue and copy remaining data as critical
+            criticalData.insert(criticalData.end(), data + pos, data + size);
+            return;
         }
         
         uint8_t marker = data[pos + 1];
         pos += 2;
         
+        std::cerr << "splitACCoefficientsExact: Found marker 0x" << std::hex << (int)marker << std::dec << std::endl;
+        
         if (marker == EOI_MARKER) {
             // End of image
             criticalData.insert(criticalData.end(), data + pos - 2, data + pos);
+            std::cerr << "splitACCoefficientsExact: Found EOI marker" << std::endl;
             break;
         }
         
         if (marker == SOS_MARKER) {
             // Start of scan - decode coefficients
+            std::cerr << "splitACCoefficientsExact: Found SOS marker" << std::endl;
             if (pos + 2 > size) return;
             
             uint16_t sosLength = readJPEGUint16(data + pos);
@@ -260,6 +270,7 @@ void splitACCoefficientsExact(const char* buffer, size_t size) {
         
         if (marker == DHT_MARKER) {
             // Define Huffman Table
+            std::cerr << "splitACCoefficientsExact: Found DHT marker" << std::endl;
             if (pos + 2 > size) return;
             
             uint16_t dhtLength = readJPEGUint16(data + pos);
@@ -275,6 +286,7 @@ void splitACCoefficientsExact(const char* buffer, size_t size) {
         }
         
         // Other markers - copy to critical data
+        std::cerr << "splitACCoefficientsExact: Found other marker 0x" << std::hex << (int)marker << std::dec << std::endl;
         if (pos + 2 > size) return;
         uint16_t segmentLength = readJPEGUint16(data + pos);
         if (pos + segmentLength > size) return;
@@ -282,6 +294,9 @@ void splitACCoefficientsExact(const char* buffer, size_t size) {
         criticalData.insert(criticalData.end(), data + pos - 2, data + pos + segmentLength);
         pos += segmentLength;
     }
+    
+    std::cerr << "splitACCoefficientsExact: Finished. Critical data size: " << criticalData.size() 
+              << ", AC coefficient data size: " << acCoefficientRawData.size() << std::endl;
 }
 
 // Rebuild JPEG data with exact coefficient placement
@@ -415,7 +430,6 @@ std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& cri
 }
 
 ResultCode JpegFileHandler::createMapping(const char* buffer, size_t size) {
-    
     return ResultCode::SUCCESS;
 }
 
@@ -472,10 +486,17 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
     }
     
+    std::cerr << "writeFile: Processing " << size << " bytes, offset " << offset << std::endl;
+    std::cerr << "writeFile: Base path: " << basePath << std::endl;
+    
     // For write operations, re-parse the entire file
     if (offset == 0) {
         // Full file write
+        std::cerr << "writeFile: Full file write, calling splitACCoefficientsExact" << std::endl;
         splitACCoefficientsExact(buffer, size);
+        
+        std::cerr << "writeFile: After parsing - critical data size: " << criticalData.size() 
+                  << ", AC coefficient data size: " << acCoefficientRawData.size() << std::endl;
         
         // Write updated critical data to .crit file
         std::string critPath = basePath + ".crit";
@@ -483,6 +504,9 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         if (critFile.is_open()) {
             critFile.write(reinterpret_cast<const char*>(criticalData.data()), criticalData.size());
             critFile.close();
+            std::cerr << "writeFile: Wrote " << criticalData.size() << " bytes to " << critPath << std::endl;
+        } else {
+            std::cerr << "writeFile: Failed to open " << critPath << " for writing" << std::endl;
         }
         
         // Write updated AC coefficient data to .noncrit file
@@ -491,6 +515,9 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         if (noncritFile.is_open()) {
             noncritFile.write(reinterpret_cast<const char*>(acCoefficientRawData.data()), acCoefficientRawData.size());
             noncritFile.close();
+            std::cerr << "writeFile: Wrote " << acCoefficientRawData.size() << " bytes to " << noncritPath << std::endl;
+        } else {
+            std::cerr << "writeFile: Failed to open " << noncritPath << " for writing" << std::endl;
         }
     } else {
         // Partial write - this is more complex and would require rebuilding the entire file
