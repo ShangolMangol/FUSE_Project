@@ -239,9 +239,11 @@ void splitACCoefficientsExact(const char* buffer, size_t size) {
         if (data[pos] != 0xFF) {
             std::cerr << "splitACCoefficientsExact: Invalid JPEG marker at position " << pos 
                       << " (expected 0xFF, got 0x" << std::hex << (int)data[pos] << std::dec << ")" << std::endl;
-            // Instead of returning, try to continue and copy remaining data as critical
-            criticalData.insert(criticalData.end(), data + pos, data + size);
-            return;
+            // Instead of returning, try to find the next valid marker
+            // Copy current data as critical and continue searching
+            criticalData.insert(criticalData.end(), data + pos, data + pos + 1);
+            pos++;
+            continue;
         }
         
         uint8_t marker = data[pos + 1];
