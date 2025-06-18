@@ -472,11 +472,21 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
         return ResultCode::FAILURE;
     }
     
-    std::vector<uint8_t> noncritData((std::istreambuf_iterator<char>(noncritFile)), {});
+    std::vector<int16_t> acCoeffValues;
+    noncritFile.seekg(0, std::ios::end);
+    size_t fileSize = noncritFile.tellg();
+    noncritFile.seekg(0, std::ios::beg);
+    
+    size_t numCoeffs = fileSize / sizeof(int16_t);
+    acCoeffValues.resize(numCoeffs);
+    noncritFile.read(reinterpret_cast<char*>(acCoeffValues.data()), fileSize);
     noncritFile.close();
     
+    std::cerr << "readFile: Read " << critData.size() << " bytes from .crit, " 
+              << acCoeffValues.size() << " AC coefficients from .noncrit" << std::endl;
+    
     // Rebuild the original JPEG data by parsing critical data and inserting AC coefficients
-    std::vector<uint8_t> result = rebuildJPEGFromCriticalData(critData, noncritData);
+    std::vector<uint8_t> result = rebuildJPEGFromCriticalData(critData, acCoeffValues);
     
     // Copy the requested portion
     if (offset + size <= result.size()) {
@@ -524,9 +534,11 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         std::string noncritPath = basePath + ".noncrit";
         std::ofstream noncritFile(noncritPath, std::ios::binary);
         if (noncritFile.is_open()) {
-            noncritFile.write(reinterpret_cast<const char*>(acCoefficientRawData.data()), acCoefficientRawData.size());
+            noncritFile.write(reinterpret_cast<const char*>(acCoefficientValues.data()), 
+                             acCoefficientValues.size() * sizeof(int16_t));
             noncritFile.close();
-            std::cerr << "writeFile: Wrote " << acCoefficientRawData.size() << " bytes to " << noncritPath << std::endl;
+            std::cerr << "writeFile: Wrote " << (acCoefficientValues.size() * sizeof(int16_t)) 
+                      << " bytes to " << noncritPath << " (" << acCoefficientValues.size() << " AC coefficients)" << std::endl;
         } else {
             std::cerr << "writeFile: Failed to open " << noncritPath << " for writing" << std::endl;
         }
@@ -572,7 +584,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         
         std::ofstream noncritFileOut(noncritPath, std::ios::binary);
         if (noncritFileOut.is_open()) {
-            noncritFileOut.write(reinterpret_cast<const char*>(acCoefficientRawData.data()), acCoefficientRawData.size());
+            noncritFileOut.write(reinterpret_cast<const char*>(acCoefficientValues.data()), acCoefficientValues.size() * sizeof(int16_t));
             noncritFileOut.close();
         }
     }
