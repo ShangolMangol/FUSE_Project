@@ -1,15 +1,15 @@
 # FUSE Project
 
 ## Compilation
-To compile the project:
+To compile the project inside the folder `CriticalFuse`:
 ```bash
 make
 ```
 
 This will build:
 - CriticalFUSE (the main FUSE filesystem)
-- HandlerTest (for testing file handlers)
-- BitFlipper (for bit manipulation)
+- HandlerTest (for testing txt file split)
+- BitFlipper (for bit manipulation over non-critical data)
 
 ### Makefile Targets
 The Makefile provides several targets:
@@ -37,6 +37,53 @@ To unmount:
 ```bash
 fusermount3 -u ./mnt
 ```
+
+## Adding a New File Handler
+
+To add support for a new file type in the Critical Fuse system, follow these steps:
+
+1. **Create a New Handler Class:**
+   - In the `CriticalFuse/FileHandlers/` directory, create a new C++ class for your file type (e.g., `MyFileHandler.cpp` and `MyFileHandler.h`).
+   - Inherit from the abstract base class `AbstractFileHandler`.
+
+2. **Implement Required Methods:**
+   - At minimum, implement the mapping/splitting function(s) specific to your file type, as well as any other pure virtual methods from `AbstractFileHandler`.
+   - Example skeleton:
+     ```cpp
+     // MyFileHandler.h
+     #include "AbstractFile.h"
+     class MyFileHandler : public AbstractFileHandler {
+     public:
+         MyFileHandler(const std::string& path);
+         ResultCode createMapping(const char* buffer, size_t size) override;
+         // Implement other required methods...
+     };
+     ```
+
+3. **Register the New Handler:**
+   - In the main FUSE logic (typically in `CriticalFUSE.cpp`), locate the section where file handlers are selected based on file type, in the function `getFileHandler`.
+   - Add an `if` or `switch` statement to instantiate your new handler for the appropriate file extension or magic number.
+   - Example:
+     ```cpp
+     if (extension == ".mytype") {
+         fileHandler = std::make_unique<MyFileHandler>(path);
+     }
+     ```
+
+4. **Update the Build System:**
+   - Add your new `.cpp` file to the `CriticalFuse/Makefile` so it is compiled and linked.
+
+5. **Run The System With Your Handler:**
+   - Build the project with `make` and test your handler using the FUSE filesystem.
+
+**Summary:**
+- Inherit from `AbstractFileHandler`.
+- Implement required methods for your file type.
+- Register your handler in the main FUSE logic.
+- Add your files to the Makefile.
+- Test thoroughly.
+
+For more details, refer to the existing handlers in `CriticalFuse/FileHandlers/` (e.g., `JpegFile.cpp`, `TextFile.cpp`).
 
 ## BitFlipper Tool
 The BitFlipper tool allows you to flip bits in files, either completely or randomly. This is useful for testing file corruption scenarios and error resilience.

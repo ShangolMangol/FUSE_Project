@@ -19,8 +19,7 @@ int main() {
     const char* mappingPath = "test.txt.mapping";
 
     // Test - text file data
-    // const char* testData = "Hello, this is a test file with some content that will be split into critical and non-critical data.";
-    const char* testData ="";
+    const char* testData = "Hello, this is a test file with some content that will be split into critical and non-critical data.";
     size_t dataSize = strlen(testData);
 
     std::cout << "Original data: " << testData << std::endl;

@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -I. -D_FILE_OFFSET_BITS=64 `pkg-config fuse3 --cflags`
-LDFLAGS = -pthread `pkg-config fuse3 --libs`
+LDFLAGS = -pthread `pkg-config fuse3 --libs` -ljpeg
 
 # Common source files
 COMMON_SRCS = \
@@ -11,11 +11,10 @@ COMMON_SRCS = \
     FileHandlers/PngFile.cpp \
     FileHandlers/BmpFile.cpp \
     FileHandlers/JpegFile.cpp \
-    Utilities/Range.cpp \
-    Utilities/HuffmanTable.cpp
+    Utilities/Range.cpp 
 
 # Target-specific sources
-HANDLER_SRCS = main.cpp $(COMMON_SRCS)
+HANDLER_SRCS = TextFileSplitTest.cpp $(COMMON_SRCS)
 FUSE_SRCS = FUSE/CriticalFUSE.cpp $(COMMON_SRCS)
 TEST_SRCS = test_exact_jpeg_parsing.cpp $(COMMON_SRCS)
 

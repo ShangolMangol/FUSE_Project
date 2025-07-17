@@ -235,13 +235,15 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
+    std::cout << "Writing to file: " << fpath << std::endl;
     // Check if this is a critical file
     std::string mappingPath = std::string(fpath) + ".mapping";
     if (access(mappingPath.c_str(), F_OK) == 0) {
         auto handler = getFileHandler(path);
         if (!handler) {
             // Not a supported file type, treat as regular file
+            std::cerr << "Not a supported file type for critical write: " << path << std::endl;
+            std::cerr << "Mapping path: " << mappingPath << std::endl;
             return -ENOENT;
         }
         if (handler->writeFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {

@@ -161,10 +161,10 @@ int main(int argc, char** argv) {
             for (JDIMENSION col = 0; col < compptr->width_in_blocks; ++col) {
                 JBLOCK* blk = &buffer[0][col];
                 // DC
-                write_be16(dc_out, blk->data[0]);
+                write_be16(dc_out, blk[0][0]);
                 // AC (1..63)
                 for (int i = 1; i < DCTSIZE2; ++i) {
-                    write_be16(ac_out, blk->data[i]);
+                    write_be16(ac_out, blk[0][i]);
                 }
             }
         }

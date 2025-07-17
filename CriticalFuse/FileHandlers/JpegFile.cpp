@@ -1,719 +1,282 @@
+// Full C++ class using libjpeg to split JPEG into AC and critical (DC + headers) parts
+// Requires libjpeg (e.g., libjpeg-turbo)
+
 #include "JpegFile.h"
-#include "../Utilities/BitReader.h"
-#include "../Utilities/HuffmanTable.h"
-#include <cstdint>
-#include <cstring>
+#include <jpeglib.h>
 #include <vector>
-#include <map>
-#include <iostream>
 #include <fstream>
+#include <iostream>
+#include <cstring>
+#include <string>
 
-// JPEG marker constants
-const uint8_t SOI_MARKER = 0xD8;
-const uint8_t EOI_MARKER = 0xD9;
-const uint8_t SOS_MARKER = 0xDA;
-const uint8_t DHT_MARKER = 0xC4;
+// Helper to copy coefficient arrays safely from decompressor to compressor
+static jvirt_barray_ptr* copy_coeff_arrays(jpeg_compress_struct* cinfo, jvirt_barray_ptr* src, jpeg_decompress_struct& dinfo) {
+    jvirt_barray_ptr* dst = (jvirt_barray_ptr*)
+        (*cinfo->mem->alloc_small)((j_common_ptr)cinfo, JPOOL_IMAGE, sizeof(jvirt_barray_ptr) * dinfo.num_components);
 
-// Structure to store exact coefficient information
-struct ExactCoefficient {
-    bool isDC;
-    size_t byteStart;
-    size_t byteEnd;
-    int16_t value;
-    uint8_t runLength; // for AC coefficients
-    uint8_t sizeBits;  // number of bits for amplitude
-};
+    for (int comp = 0; comp < dinfo.num_components; ++comp) {
+        jpeg_component_info* sci = &dinfo.comp_info[comp];
+        jpeg_component_info* dci = &cinfo->comp_info[comp];
+        JDIMENSION h = sci->height_in_blocks;
+        JDIMENSION w = sci->width_in_blocks;
 
-// Global storage for exact coefficient separation
-static std::vector<ExactCoefficient> exactCoefficients;
-static std::vector<uint8_t> criticalData;
-static std::vector<int16_t> acCoefficientValues; // Store actual coefficient values
-static std::vector<uint8_t> acCoefficientRawData; // Store raw entropy data
-static size_t originalSize = 0;
-static std::string currentMappingPath; // Store the current mapping path
+        dst[comp] = cinfo->mem->request_virt_barray((j_common_ptr)cinfo, JPOOL_IMAGE, TRUE, w, h, 1);
 
-// Read 16-bit value from JPEG data (JPEG uses big-endian for segment lengths)
-uint16_t readJPEGUint16(const uint8_t* data) {
-    return (data[0] << 8) | data[1]; // Big-endian (network byte order)
+        JBLOCKARRAY src_buf = dinfo.mem->access_virt_barray((j_common_ptr)&dinfo, src[comp], 0, h, FALSE);
+        JBLOCKARRAY dst_buf = cinfo->mem->access_virt_barray((j_common_ptr)cinfo, dst[comp], 0, h, TRUE);
+
+        for (JDIMENSION row = 0; row < h; ++row) {
+            std::memcpy(dst_buf[row], src_buf[row], sizeof(JBLOCK) * w);
+        }
+    }
+
+    return dst;
 }
 
-// Parse DHT (Define Huffman Table) segments
-bool parseDHT(const uint8_t* data, size_t length, std::map<uint8_t, HuffmanTable>& tables) {
-    if (length < 2) return false;
-    
-    uint16_t dhtLength = readJPEGUint16(data);
-    if (dhtLength < 3 || dhtLength > length) return false;
-    
-    std::cerr << "parseDHT: Parsing DHT segment of length " << dhtLength << std::endl;
-    
-    size_t pos = 2;
-    while (pos < dhtLength) {
-        if (pos + 1 >= dhtLength) break;
-        
-        uint8_t tableInfo = data[pos];
-        uint8_t tableClass = (tableInfo >> 4) & 0x0F; // 0=DC, 1=AC
-        uint8_t tableId = tableInfo & 0x0F;
-        uint8_t tableKey = (tableClass << 4) | tableId;
-        
-        std::cerr << "parseDHT: Found table " << (int)tableId << " (class " << (tableClass == 0 ? "DC" : "AC") << ")" << std::endl;
-        
-        pos++;
-        
-        HuffmanTable table;
-        if (!table.parse(data + pos - 1, dhtLength - pos + 1)) {
-            std::cerr << "parseDHT: Failed to parse table " << (int)tableId << std::endl;
-            return false;
-        }
-        tables[tableKey] = table;
-        
-        // Calculate how much data was consumed by the table
-        uint8_t codeLengths[16];
-        std::memcpy(codeLengths, data + pos, 16); // pos is after table info byte
-        
-        int totalSymbols = 0;
-        for (int i = 0; i < 16; i++) {
-            totalSymbols += codeLengths[i];
-        }
-        pos += 16 + totalSymbols; // code lengths + symbols
-        
-        std::cerr << "parseDHT: Table " << (int)tableId << " has " << totalSymbols << " symbols" << std::endl;
-    }
-    
-    return true;
-}
-
-// Parse SOS (Start of Scan) and decode coefficients exactly
-bool parseSOSAndCoefficients(const uint8_t* data, size_t length, size_t baseOffset, 
-                           const std::map<uint8_t, HuffmanTable>& tables) {
-    if (length < 2) return false;
-
-    std::cerr << "parseSOSAndCoefficients: Parsing SOS and coefficients" << std::endl;
-    
-    uint16_t sosLength = readJPEGUint16(data);
-    if (sosLength < 2 || sosLength > length) return false;
-    
-    // Copy SOS header to critical data
-    criticalData.insert(criticalData.end(), data, data + sosLength);
-    
-    // Parse SOS header to find component info and Huffman table assignments
-    if (sosLength < 6) return false; // Minimum SOS header size
-    
-    uint8_t numComponents = data[2];
-    if (sosLength < 6 + numComponents * 2) return false;
-    
-    // Parse component info and find Huffman tables
-    std::map<uint8_t, uint8_t> componentToDCTable;
-    std::map<uint8_t, uint8_t> componentToACTable;
-    
-    for (int i = 0; i < numComponents; i++) {
-        uint8_t componentId = data[3 + i * 2];
-        uint8_t tableSelectors = data[4 + i * 2];
-        uint8_t dcTableId = (tableSelectors >> 4) & 0x0F;
-        uint8_t acTableId = tableSelectors & 0x0F;
-        
-        componentToDCTable[componentId] = dcTableId;
-        componentToACTable[componentId] = acTableId;
-        
-        std::cerr << "parseSOSAndCoefficients: Component " << (int)componentId 
-                  << " uses DC table " << (int)dcTableId << " and AC table " << (int)acTableId << std::endl;
-    }
-    
-    // Find the Huffman tables we need
-    HuffmanTable dcTable, acTable;
-    bool dcTableFound = false, acTableFound = false;
-    
-    std::cerr << "parseSOSAndCoefficients: Available Huffman tables:" << std::endl;
-    for (const auto& pair : tables) {
-        uint8_t tableClass = (pair.first >> 4) & 0x0F;
-        uint8_t tableId = pair.first & 0x0F;
-        std::cerr << "  Table " << (int)tableId << " (class " << (tableClass == 0 ? "DC" : "AC") << ")" << std::endl;
-    }
-    
-    for (const auto& pair : tables) {
-        uint8_t tableClass = (pair.first >> 4) & 0x0F;
-        uint8_t tableId = pair.first & 0x0F;
-        
-        // Check if this table matches any component's requirements
-        for (const auto& compPair : componentToDCTable) {
-            if (tableClass == 0 && tableId == compPair.second) { // DC table
-                dcTable = pair.second;
-                dcTableFound = true;
-                std::cerr << "parseSOSAndCoefficients: Found DC table " << (int)tableId << std::endl;
-            }
-        }
-        
-        for (const auto& compPair : componentToACTable) {
-            if (tableClass == 1 && tableId == compPair.second) { // AC table
-                acTable = pair.second;
-                acTableFound = true;
-                std::cerr << "parseSOSAndCoefficients: Found AC table " << (int)tableId << std::endl;
-            }
-        }
-    }
-    
-    if (!dcTableFound || !acTableFound) {
-        std::cerr << "Required Huffman tables not found" << std::endl;
-        return false;
-    }
-    
-    // Start decoding entropy-coded data
-    const uint8_t* entropyData = data + sosLength;
-    size_t entropyLength = 0;
-
-    // Find next marker (0xFF followed by a non-zero byte)
-    for (size_t i = sosLength; i + 1 < length; ++i) {
-        if (data[i] == 0xFF && data[i + 1] != 0x00) {
-            entropyLength = i - sosLength;
-            break;
-        }
-    }
-    if (entropyLength == 0) {
-        entropyLength = length - sosLength; // Last segment, no marker found
-    }
-    
-    // JPEG uses MSB-first bit reading (big endian bit order)
-    BitReader reader(entropyData, entropyLength, true); // true = MSB-first
-    
-    std::cerr << "parseSOSAndCoefficients: Starting coefficient decoding with " << entropyLength << " bytes of entropy data" << std::endl;
-    
-    size_t blockCount = 0;
-    size_t maxBlocks = 100000; // Safety limit to prevent infinite loops
-    
-    while (!reader.eof() && blockCount < maxBlocks) {
-        size_t posBefore = reader.getByteOffset();
-        
-        std::cerr << "parseSOSAndCoefficients: Processing block " << blockCount << " at byte offset " << posBefore << std::endl;
-        
-        // Each 8x8 block has 1 DC + 63 AC coefficients
-        // For DC coefficient (first in block)
-        if (blockCount % 64 == 0) {
-            ExactCoefficient dc;
-            dc.isDC = true;
-            dc.byteStart = baseOffset + posBefore;
-            
-            // Decode DC coefficient using DC table
-            int symbol = dcTable.decodeSymbol(reader);
-            if (symbol < 0) {
-                std::cerr << "parseSOSAndCoefficients: Failed to decode DC symbol at block " << blockCount << std::endl;
-                break;
-            }
-            
-            dc.sizeBits = symbol & 0x0F;
-            if (dc.sizeBits > 0) {
-                uint32_t amplitude;
-                if (!reader.readBits(amplitude, dc.sizeBits)) {
-                    std::cerr << "parseSOSAndCoefficients: Failed to read DC amplitude at block " << blockCount << std::endl;
-                    break;
-                }
-                dc.value = static_cast<int16_t>(amplitude);
-            } else {
-                dc.value = 0;
-            }
-            
-            dc.byteEnd = baseOffset + reader.getByteOffset() - 1;
-            exactCoefficients.push_back(dc);
-            
-            // Store DC coefficient raw data in critical data
-            size_t dcDataSize = dc.byteEnd - dc.byteStart + 1;
-            if (dc.byteStart >= baseOffset && dc.byteEnd >= dc.byteStart && 
-                (dc.byteStart - baseOffset + dcDataSize) <= entropyLength) {
-                criticalData.insert(criticalData.end(), 
-                                  entropyData + (dc.byteStart - baseOffset), 
-                                  entropyData + (dc.byteStart - baseOffset) + dcDataSize);
-            }
-            
-        } else {
-            // AC coefficient
-            ExactCoefficient ac;
-            ac.isDC = false;
-            ac.byteStart = baseOffset + posBefore;
-            
-            // Decode AC coefficient using AC table
-            int symbol = acTable.decodeSymbol(reader);
-            if (symbol < 0) {
-                std::cerr << "parseSOSAndCoefficients: Failed to decode AC symbol at block " << blockCount << std::endl;
-                break;
-            }
-            
-            if (symbol == 0x00) {
-                // End of block
-                ac.runLength = 0;
-                ac.sizeBits = 0;
-                ac.value = 0;
-            } else {
-                ac.runLength = (symbol >> 4) & 0x0F;
-                ac.sizeBits = symbol & 0x0F;
-                
-                if (ac.sizeBits > 0) {
-                    uint32_t amplitude;
-                    if (!reader.readBits(amplitude, ac.sizeBits)) {
-                        std::cerr << "parseSOSAndCoefficients: Failed to read AC amplitude at block " << blockCount << std::endl;
-                        break;
-                    }
-                    ac.value = static_cast<int16_t>(amplitude);
-                } else {
-                    ac.value = 0;
-                }
-            }
-            
-            ac.byteEnd = baseOffset + reader.getByteOffset() - 1;
-            exactCoefficients.push_back(ac);
-            
-            // Store AC coefficient value (this goes to .noncrit file)
-            acCoefficientValues.push_back(ac.value);
-            
-            // Store AC coefficient raw data (this goes to .noncrit file)
-            size_t acDataSize = ac.byteEnd - ac.byteStart + 1;
-            if (ac.byteStart >= baseOffset && ac.byteEnd >= ac.byteStart && 
-                (ac.byteStart - baseOffset + acDataSize) <= entropyLength) {
-                acCoefficientRawData.insert(acCoefficientRawData.end(), 
-                                          entropyData + (ac.byteStart - baseOffset), 
-                                          entropyData + (ac.byteStart - baseOffset) + acDataSize);
-            }
-        }
-        
-        blockCount++;
-        
-        if (blockCount % 1000 == 0) {
-            std::cerr << "parseSOSAndCoefficients: Processed " << blockCount << " blocks" << std::endl;
-        }
-    }
-    
-    std::cerr << "parseSOSAndCoefficients: Finished decoding " << blockCount << " blocks" << std::endl;
-    
-    return true;
-}
-
-// Split AC coefficients exactly using proper JPEG parsing
-void splitACCoefficientsExact(const char* buffer, size_t size) {
-    if (size == 0) return;
-    
-    // Clear previous data
-    exactCoefficients.clear();
+void JpegFileHandler::splitACCoefficientsExact(const char* jpegData, size_t dataSize) {
+    std::cerr << "[DEBUG] splitACCoefficientsExact: called, dataSize=" << dataSize << std::endl;
     criticalData.clear();
     acCoefficientValues.clear();
-    acCoefficientRawData.clear();
-    originalSize = size;
-    
-    const uint8_t* data = reinterpret_cast<const uint8_t*>(buffer);
-    size_t pos = 0;
-    
-    // Parse JPEG markers and build Huffman tables
-    std::map<uint8_t, HuffmanTable> huffmanTables;
-    
-    std::cerr << "splitACCoefficientsExact: Processing " << size << " bytes" << std::endl;
-    
-    // First, seek to SOI marker (Start of Image)
-    while (pos + 1 < size && !(data[pos] == 0xFF && data[pos + 1] == SOI_MARKER)) {
-        pos++;
-    }
-    
-    if (pos + 1 >= size) {
-        std::cerr << "splitACCoefficientsExact: SOI marker not found" << std::endl;
-        return;
-    }
-    
-    // Copy SOI marker to critical data
-    criticalData.push_back(data[pos]);
-    criticalData.push_back(data[pos + 1]);
-    pos += 2;
-    
-    std::cerr << "splitACCoefficientsExact: Found SOI marker at position " << (pos - 2) << std::endl;
-    
-    // Now parse all segments until we find SOS (Start of Scan)
-    while (pos + 1 < size) {
-        // Seek to next marker (0xFF)
-        while (pos + 1 < size && data[pos] != 0xFF) {
-            pos++;
-        }
-        
-        if (pos + 1 >= size) {
-            std::cerr << "splitACCoefficientsExact: No more markers found" << std::endl;
-            break;
-        }
-        
-        // Check if this is a marker (0xFF followed by non-zero)
-        if (data[pos + 1] == 0x00) {
-            // This is a stuffed 0xFF in entropy-coded data, skip it
-            pos++;
-            continue;
-        }
-        
-        uint8_t marker = data[pos + 1];
-        std::cerr << "splitACCoefficientsExact: Found marker 0x" << std::hex << (int)marker << std::dec << " at position " << pos << std::endl;
-        
-        if (marker == SOS_MARKER) {
-            // Start of Scan - this is where the AC/DC coefficients are
-            std::cerr << "splitACCoefficientsExact: Found SOS marker - parsing coefficients" << std::endl;
-            
-            if (pos + 2 > size) return;
-            
-            uint16_t sosLength = readJPEGUint16(data + pos + 2);
-            if (pos + 2 + sosLength > size) return;
-            
-            // Parse the scan data (entropy-coded data containing AC/DC coefficients)
-            size_t scanDataStart = pos + 2 + sosLength;
-            size_t scanDataEnd = size;
-            
-            // Find the end of scan data (look for EOI marker or next marker)
-            for (size_t i = scanDataStart; i + 1 < size; i++) {
-                if (data[i] == 0xFF && data[i + 1] != 0x00) {
-                    scanDataEnd = i;
-                    break;
-                }
-            }
-            
-            std::cerr << "splitACCoefficientsExact: Scan data from " << scanDataStart << " to " << scanDataEnd 
-                      << " (length: " << (scanDataEnd - scanDataStart) << " bytes)" << std::endl;
-            
-            // Parse the scan data to extract AC/DC coefficients
-            if (scanDataEnd > scanDataStart) {
-                // Create a buffer that includes the SOS header + scan data
-                std::vector<uint8_t> sosAndScanData;
-                sosAndScanData.insert(sosAndScanData.end(), data + pos + 2, data + pos + 2 + sosLength); // SOS header
-                sosAndScanData.insert(sosAndScanData.end(), data + scanDataStart, data + scanDataEnd); // Scan data
-                
-                // Pass the complete SOS segment to parseSOSAndCoefficients
-                parseSOSAndCoefficients(sosAndScanData.data(), sosAndScanData.size(), scanDataStart, huffmanTables);
-                
-                // The parseSOSAndCoefficients function will:
-                // 1. Extract AC coefficient values and store them in acCoefficientValues (goes to .noncrit)
-                // 2. Extract DC coefficient data and add it to criticalData (goes to .crit)
-                // 3. Extract AC coefficient raw data and store it in acCoefficientRawData (goes to .noncrit)
-            }
-            
-            // Copy any remaining data (EOI marker, etc.) to critical data
-            if (scanDataEnd < size) {
-                criticalData.insert(criticalData.end(), data + scanDataEnd, data + size);
-            }
-            break;
-            
-        } else if (marker == EOI_MARKER) {
-            // End of Image
-            std::cerr << "splitACCoefficientsExact: Found EOI marker" << std::endl;
-            criticalData.push_back(data[pos]);
-            criticalData.push_back(data[pos + 1]);
-            break;
-            
-        } else if (marker == DHT_MARKER) {
-            // Define Huffman Table
-            std::cerr << "splitACCoefficientsExact: Found DHT marker" << std::endl;
-            if (pos + 2 > size) return;
-            
-            uint16_t dhtLength = readJPEGUint16(data + pos + 2);
-            if (pos + 2 + dhtLength > size) return;
-            
-            // Copy DHT to critical data
-            criticalData.insert(criticalData.end(), data + pos, data + pos + 2 + dhtLength);
-            
-            // Parse Huffman table
-            parseDHT(data + pos + 2, dhtLength, huffmanTables);
-            pos += 2 + dhtLength;
-            
-        } else {
-            // Other markers - copy to critical data
-            std::cerr << "splitACCoefficientsExact: Found other marker 0x" << std::hex << (int)marker << std::dec << std::endl;
-            if (pos + 2 > size) return;
-            
-            uint16_t segmentLength = readJPEGUint16(data + pos + 2);
-            if (pos + 2 + segmentLength > size) return;
-            
-            criticalData.insert(criticalData.end(), data + pos, data + pos + 2 + segmentLength);
-            pos += 2 + segmentLength;
-        }
-    }
-    
-    std::cerr << "splitACCoefficientsExact: Finished. Critical data size: " << criticalData.size() 
-              << ", AC coefficient count: " << acCoefficientValues.size() << std::endl;
-}
 
-// Rebuild JPEG data with exact coefficient placement
-std::vector<uint8_t> rebuildJPEGDataExact() {
-    std::vector<uint8_t> result;
-    result.reserve(originalSize);
-    
-    // Start with critical data
-    result.insert(result.end(), criticalData.begin(), criticalData.end());
-    
-    // Insert AC coefficients at their exact positions
-    size_t acIndex = 0;
-    for (const auto& coeff : exactCoefficients) {
-        if (!coeff.isDC) {
-            // This is an AC coefficient - insert its raw data
-            size_t coeffSize = coeff.byteEnd - coeff.byteStart + 1;
-            if (acIndex + coeffSize <= acCoefficientRawData.size()) {
-                result.insert(result.end(), 
-                            acCoefficientRawData.begin() + acIndex,
-                            acCoefficientRawData.begin() + acIndex + coeffSize);
-                acIndex += coeffSize;
-            }
-        }
-    }
-    
-    return result;
-}
+    // 1. Set up decompression
+    jpeg_decompress_struct dinfo;
+    jpeg_error_mgr jerr;
+    dinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&dinfo);
+    jpeg_mem_src(&dinfo, reinterpret_cast<const unsigned char*>(jpegData), dataSize);
+    jpeg_read_header(&dinfo, TRUE);
 
-// Rebuild JPEG data by parsing critical data and inserting AC coefficients
-std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& critData, const std::vector<int16_t>& acCoeffValues) {
-    std::vector<uint8_t> result;
-    result.reserve(critData.size() + acCoeffValues.size() * sizeof(int16_t));
-    
-    const uint8_t* data = critData.data();
-    size_t size = critData.size();
-    size_t pos = 0;
-    size_t acIndex = 0;
-    
-    std::cerr << "rebuildJPEGFromCriticalData: Rebuilding from " << critData.size() 
-              << " bytes critical + " << acCoeffValues.size() << " AC coefficients" << std::endl;
-    
-    // Parse JPEG markers and rebuild with AC coefficients
-    std::map<uint8_t, HuffmanTable> huffmanTables;
-    
-    while (pos + 2 < size) {
-        // Look for JPEG markers (0xFF followed by non-zero byte)
-        if (data[pos] == 0xFF && data[pos + 1] != 0x00) {
-            uint8_t marker = data[pos + 1];
-            pos += 2;
-            
-            if (marker == EOI_MARKER) {
-                // End of image - copy EOI marker
-                result.insert(result.end(), data + pos - 2, data + pos);
-                break;
-            }
-            
-            if (marker == SOS_MARKER) {
-                // Start of scan - copy SOS header and decode scan data exactly
-                if (pos + 2 > size) break;
-                
-                uint16_t sosLength = readJPEGUint16(data + pos);
-                if (pos + sosLength > size) break;
-                
-                // Copy SOS header
-                result.insert(result.end(), data + pos - 2, data + pos + sosLength);
-                pos += sosLength;
-                
-                // Now we need to decode the scan data exactly to find where to insert AC coefficients
-                // Parse the scan data using the same logic as in parseSOSAndCoefficients
-                const uint8_t* scanData = data + pos;
-                size_t scanDataSize = size - pos;
-                
-                // Find the end of scan data (before EOI marker)
-                size_t scanEnd = scanDataSize;
-                for (size_t i = 0; i < scanDataSize - 1; i++) {
-                    if (scanData[i] == 0xFF && scanData[i + 1] != 0x00) {
-                        scanEnd = i;
-                        break;
-                    }
-                }
-                
-                // Parse the scan data exactly to separate DC and AC coefficients
-                // We need to decode the Huffman-coded data to find exact positions
-                if (scanEnd > 0) {
-                    // For now, we'll use a more sophisticated approach:
-                    // Parse the scan data to find DC coefficients and insert AC coefficients at the right positions
-                    
-                    // Copy the scan data as-is for now (this is a simplified approach)
-                    // In a full implementation, we would decode the Huffman data to find exact positions
-                    result.insert(result.end(), scanData, scanData + scanEnd);
-                    
-                    // Insert AC coefficients from noncrit file
-                    if (acIndex < acCoeffValues.size()) {
-                        // Convert AC coefficient values back to their raw representation
-                        // This is a simplified approach - in a full implementation, we would need to
-                        // re-encode the coefficients using the Huffman tables
-                        for (size_t i = acIndex; i < acCoeffValues.size(); i++) {
-                            int16_t value = acCoeffValues[i];
-                            result.push_back((value >> 8) & 0xFF);
-                            result.push_back(value & 0xFF);
-                        }
-                        acIndex = acCoeffValues.size(); // Mark as consumed
-                    }
-                }
-                
-                // Copy any remaining data (EOI marker, etc.)
-                if (pos + scanEnd < size) {
-                    result.insert(result.end(), data + pos + scanEnd, data + size);
-                }
-                break;
-            }
-            
-            if (marker == DHT_MARKER) {
-                // Define Huffman Table - copy as is
-                if (pos + 2 > size) break;
-                
-                uint16_t dhtLength = readJPEGUint16(data + pos);
-                if (pos + dhtLength > size) break;
-                
-                result.insert(result.end(), data + pos - 2, data + pos + dhtLength);
-                pos += dhtLength;
+    // Check: Basic Image Info
+    std::cerr << "[DEBUG] Image width: " << dinfo.image_width << std::endl;
+    std::cerr << "[DEBUG] Image height: " << dinfo.image_height << std::endl;
+    std::cerr << "[DEBUG] Number of components: " << dinfo.num_components << std::endl;
+    std::cerr << "[DEBUG] Color space: " << dinfo.jpeg_color_space << std::endl;
+
+    // jpeg_read_coefficients - Reads the contents of JPEG file as DCT coefficients
+    jvirt_barray_ptr* coeffs_dinfo = jpeg_read_coefficients(&dinfo);
+    std::cerr << "[DEBUG] Read coefficients from decompressor" << std::endl;
+
+    // 2. Set up compression
+    jpeg_compress_struct cinfo;
+    jpeg_error_mgr cerr;
+    cinfo.err = jpeg_std_error(&cerr);
+    jpeg_create_compress(&cinfo);
+    jpeg_copy_critical_parameters(&dinfo, &cinfo);
+
+    // 3. Allocate virtual barray for compressor
+    jvirt_barray_ptr* coeffs_cinfo = (jvirt_barray_ptr*)
+        (*cinfo.mem->alloc_small)((j_common_ptr)&cinfo, JPOOL_IMAGE, sizeof(jvirt_barray_ptr) * dinfo.num_components);
+
+    for (int comp = 0; comp < dinfo.num_components; ++comp) {
+        jpeg_component_info* sci = &dinfo.comp_info[comp];
+        JDIMENSION h = sci->height_in_blocks;
+        JDIMENSION w = sci->width_in_blocks;
+        coeffs_cinfo[comp] = cinfo.mem->request_virt_barray((j_common_ptr)&cinfo, JPOOL_IMAGE, TRUE, w, h, 1);
+        std::cerr << "[DEBUG] Allocated coeffs_cinfo[" << comp << "] = " << coeffs_cinfo[comp] << " (w=" << w << ", h=" << h << ")" << std::endl;
+    }
+
+    // 4. Copy DC, extract/zero AC
+    size_t acCount = 0;
+    for (int comp = 0; comp < dinfo.num_components; ++comp) {
+        jpeg_component_info* ci = &dinfo.comp_info[comp];
+        JDIMENSION h = ci->height_in_blocks;
+        JDIMENSION w = ci->width_in_blocks;
+
+        JBLOCKARRAY src_buf = dinfo.mem->access_virt_barray((j_common_ptr)&dinfo, coeffs_dinfo[comp], 0, h, FALSE);
+        JBLOCKARRAY dst_buf = cinfo.mem->access_virt_barray((j_common_ptr)&cinfo, coeffs_cinfo[comp], 0, h, TRUE);
+
+        for (JDIMENSION row = 0; row < h; ++row) {
+            if (!src_buf[row] || !dst_buf[row]) {
+                std::cerr << "[ERROR] Null buffer row at comp " << comp << ", row " << row << std::endl;
                 continue;
             }
-            
-            // Other markers - copy as is
-            if (pos + 2 > size) break;
-            uint16_t segmentLength = readJPEGUint16(data + pos);
-            if (pos + segmentLength > size) break;
-            
-            result.insert(result.end(), data + pos - 2, data + pos + segmentLength);
-            pos += segmentLength;
-        } else {
-            // Not a marker - copy data as is
-            result.push_back(data[pos]);
-            pos++;
+
+            for (JDIMENSION col = 0; col < w; ++col) {
+                JCOEFPTR src_block = src_buf[row][col];
+                JCOEFPTR dst_block = dst_buf[row][col];
+
+                dst_block[0] = src_block[0]; // Copy DC
+                for (int i = 1; i < DCTSIZE2; ++i) {
+                    acCoefficientValues.push_back(src_block[i]);
+                    dst_block[i] = 0;
+                    ++acCount;
+                }
+            }
         }
     }
-    
+    std::cerr << "[DEBUG] Extracted and zeroed " << acCount << " AC coefficients" << std::endl;
+
+    // 5. Prepare for writing compressed output
+    unsigned char* outbuffer = nullptr;
+    unsigned long outsize = 0;
+    jpeg_mem_dest(&cinfo, &outbuffer, &outsize);
+
+    jpeg_write_coefficients(&cinfo, coeffs_cinfo);
+    jpeg_finish_compress(&cinfo);
+
+    if (outbuffer && outsize > 0) {
+        criticalData.assign(outbuffer, outbuffer + outsize);
+        free(outbuffer); // malloc'd by libjpeg
+        std::cerr << "[DEBUG] Assigned criticalData, size=" << criticalData.size() << std::endl;
+    } else {
+        std::cerr << "[ERROR] jpeg_write_coefficients produced no output" << std::endl;
+    }
+
+    // 6. Cleanup
+    jpeg_destroy_compress(&cinfo);
+    jpeg_finish_decompress(&dinfo);
+    jpeg_destroy_decompress(&dinfo);
+    std::cerr << "[DEBUG] splitACCoefficientsExact: finished" << std::endl;
+}
+
+
+
+std::vector<uint8_t> JpegFileHandler::rebuildJPEGFromCriticalData(const std::vector<uint8_t>& critData, const std::vector<int16_t>& acData) {
+    std::cerr << "[DEBUG] rebuildJPEGFromCriticalData: called, critData.size=" << critData.size() << ", acData.size=" << acData.size() << std::endl;
+    // 1. Decompress the critical data (DC only)
+    jpeg_decompress_struct dinfo;
+    jpeg_error_mgr jerr;
+    dinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&dinfo);
+    std::cerr << "[DEBUG] Created decompress struct" << std::endl;
+    jpeg_mem_src(&dinfo, critData.data(), critData.size());
+    std::cerr << "[DEBUG] Set memory source" << std::endl;
+    jpeg_read_header(&dinfo, TRUE);
+    std::cerr << "[DEBUG] Read JPEG header" << std::endl;
+
+    // Read the coefficient arrays (contains DC only)
+    jvirt_barray_ptr* coeffs_dinfo = jpeg_read_coefficients(&dinfo);
+    std::cerr << "[DEBUG] Read coefficients from decompressor" << std::endl;
+
+    // 2. Prepare compressor for writing the full JPEG
+    jpeg_compress_struct cinfo;
+    jpeg_error_mgr cerr;
+    cinfo.err = jpeg_std_error(&cerr);
+    jpeg_create_compress(&cinfo);
+    std::cerr << "[DEBUG] Created compress struct" << std::endl;
+
+    // Copy parameters from the DC-only decompressor
+    jpeg_copy_critical_parameters(&dinfo, &cinfo);
+    std::cerr << "[DEBUG] Copied critical parameters" << std::endl;
+
+    // Allocate *new* virtual coefficient arrays for the compressor
+    jvirt_barray_ptr* coeffs_cinfo = (jvirt_barray_ptr*)
+        (*cinfo.mem->alloc_small)((j_common_ptr)&cinfo, JPOOL_IMAGE, sizeof(jvirt_barray_ptr) * dinfo.num_components);
+
+    for (int comp = 0; comp < dinfo.num_components; ++comp) {
+        jpeg_component_info* sci = &dinfo.comp_info[comp];
+        JDIMENSION h = sci->height_in_blocks;
+        JDIMENSION w = sci->width_in_blocks;
+        coeffs_cinfo[comp] = cinfo.mem->request_virt_barray((j_common_ptr)&cinfo, JPOOL_IMAGE, TRUE, w, h, 1);
+        std::cerr << "[DEBUG] Allocated virt_barray for comp " << comp << ", w=" << w << ", h=" << h << std::endl;
+    }
+
+    // 3. Copy DC coefficients from decompressor and insert AC coefficients into the compressor's arrays
+    size_t ac_index = 0;
+    for (int comp = 0; comp < dinfo.num_components; ++comp) {
+        jpeg_component_info* ci = &dinfo.comp_info[comp];
+        JDIMENSION h = ci->height_in_blocks;
+        JDIMENSION w = ci->width_in_blocks;
+
+        JBLOCKARRAY src_buf = dinfo.mem->access_virt_barray((j_common_ptr)&dinfo, coeffs_dinfo[comp], 0, h, FALSE); // Read from dinfo's arrays (DC only)
+        JBLOCKARRAY dst_buf = cinfo.mem->access_virt_barray((j_common_ptr)&cinfo, coeffs_cinfo[comp], 0, h, TRUE);  // Write to cinfo's arrays
+
+        for (JDIMENSION row = 0; row < h; ++row) {
+            for (JDIMENSION col = 0; col < w; ++col) {
+                JCOEFPTR src_block = src_buf[row][col]; // This block only has DC, ACs are zero
+                JCOEFPTR dst_block = dst_buf[row][col];
+
+                // Copy DC coefficient from the DC-only source block
+                dst_block[0] = src_block[0];
+
+                // Insert AC coefficients from the stored acData
+                for (int i = 1; i < DCTSIZE2; ++i) {
+                    if (ac_index < acData.size()) {
+                        dst_block[i] = acData[ac_index++];
+                    } else {
+                        std::cerr << "[DEBUG] Warning: Not enough AC data for block " << comp << "," << row << "," << col << std::endl;
+                        dst_block[i] = 0; // Default to zero if data is missing
+                    }
+                }
+            }
+        }
+    }
+    std::cerr << "[DEBUG] Inserted " << ac_index << " AC coefficients" << std::endl;
+
+    // 4. Write out the full JPEG using the compressor's arrays
+    unsigned char* outbuffer = nullptr;
+    unsigned long outsize = 0;
+    jpeg_mem_dest(&cinfo, &outbuffer, &outsize);
+    std::cerr << "[DEBUG] Set memory destination for compressor" << std::endl;
+
+    jpeg_write_coefficients(&cinfo, coeffs_cinfo); // Use the compressor's arrays
+    std::cerr << "[DEBUG] Wrote coefficients to compressor" << std::endl;
+
+    jpeg_finish_compress(&cinfo);
+    std::cerr << "[DEBUG] Finished compression" << std::endl;
+
+    std::vector<uint8_t> result;
+    if (outbuffer && outsize > 0) {
+        result.assign(outbuffer, outbuffer + outsize);
+        free(outbuffer); // jpeg_mem_dest allocates with malloc
+        std::cerr << "[DEBUG] Assigned result, size=" << result.size() << std::endl;
+    } else {
+       std::cerr << "Error: rebuildJPEG produced no output." << std::endl;
+    }
+
+    // 5. Clean up libjpeg structures
+    jpeg_destroy_compress(&cinfo);
+    jpeg_finish_decompress(&dinfo); // Finish decompressing before destroying
+    jpeg_destroy_decompress(&dinfo);
+    std::cerr << "[DEBUG] rebuildJPEGFromCriticalData: finished" << std::endl;
     return result;
 }
 
-ResultCode JpegFileHandler::createMapping(const char* buffer, size_t size) {
+ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
+    std::string basePath(mappingPath);
+    const std::string suffix = ".mapping";
+    if (basePath.size() >= suffix.size() && basePath.compare(basePath.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        basePath = basePath.substr(0, basePath.size() - suffix.size());
+    }
+
+    if (offset == 0) {
+        splitACCoefficientsExact(buffer, size);
+
+        std::ofstream crit(basePath + ".crit", std::ios::binary);
+        crit.write(reinterpret_cast<const char*>(criticalData.data()), criticalData.size());
+
+        std::ofstream noncrit(basePath + ".noncrit", std::ios::binary);
+        noncrit.write(reinterpret_cast<const char*>(acCoefficientValues.data()), acCoefficientValues.size() * sizeof(int16_t));
+    }
     return ResultCode::SUCCESS;
 }
 
 ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size_t size, off_t offset) {
-    // Remove .mapping suffix from the path
     std::string basePath(mappingPath);
-    const std::string mappingSuffix = ".mapping";
-    if (basePath.size() > mappingSuffix.size() && 
-        basePath.substr(basePath.size() - mappingSuffix.size()) == mappingSuffix) {
-        basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
+    const std::string suffix = ".mapping";
+    if (basePath.size() >= suffix.size() && basePath.compare(basePath.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        basePath = basePath.substr(0, basePath.size() - suffix.size());
     }
-    
-    // Read critical data from .crit file
-    std::string critPath = basePath + ".crit";
-    std::ifstream critFile(critPath, std::ios::binary);
-    if (!critFile.is_open()) {
-        std::cerr << "Failed to open critical file: " << critPath << std::endl;
-        return ResultCode::FAILURE;
-    }
-    
+
+    std::ifstream critFile(basePath + ".crit", std::ios::binary);
     std::vector<uint8_t> critData((std::istreambuf_iterator<char>(critFile)), {});
-    critFile.close();
-    
-    // Read AC coefficient data from .noncrit file
-    std::string noncritPath = basePath + ".noncrit";
-    std::ifstream noncritFile(noncritPath, std::ios::binary);
-    if (!noncritFile.is_open()) {
-        std::cerr << "Failed to open non-critical file: " << noncritPath << std::endl;
-        return ResultCode::FAILURE;
-    }
-    
-    std::vector<int16_t> acCoeffValues;
-    noncritFile.seekg(0, std::ios::end);
-    size_t fileSize = noncritFile.tellg();
-    noncritFile.seekg(0, std::ios::beg);
-    
-    size_t numCoeffs = fileSize / sizeof(int16_t);
-    acCoeffValues.resize(numCoeffs);
-    noncritFile.read(reinterpret_cast<char*>(acCoeffValues.data()), fileSize);
-    noncritFile.close();
-    
-    std::cerr << "readFile: Read " << critData.size() << " bytes from .crit, " 
-              << acCoeffValues.size() << " AC coefficients from .noncrit" << std::endl;
-    
-    // Rebuild the original JPEG data by parsing critical data and inserting AC coefficients
-    std::vector<uint8_t> result = rebuildJPEGFromCriticalData(critData, acCoeffValues);
-    
-    // Copy the requested portion
-    if (offset + size <= result.size()) {
-        std::memcpy(buffer, result.data() + offset, size);
+
+    std::ifstream acFile(basePath + ".noncrit", std::ios::binary);
+    acFile.seekg(0, std::ios::end);
+    size_t fileSize = acFile.tellg();
+    acFile.seekg(0, std::ios::beg);
+    std::vector<int16_t> acData(fileSize / sizeof(int16_t));
+    acFile.read(reinterpret_cast<char*>(acData.data()), fileSize);
+
+    std::vector<uint8_t> full = rebuildJPEGFromCriticalData(critData, acData);
+    if (offset + size <= full.size()) {
+        std::memcpy(buffer, full.data() + offset, size);
         return ResultCode::SUCCESS;
-    } else {
-        std::cerr << "Requested range exceeds file size" << std::endl;
-        return ResultCode::FAILURE;
     }
+    return ResultCode::FAILURE;
 }
 
-ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
-    // Remove .mapping suffix from the path
-    std::string basePath(mappingPath);
-    const std::string mappingSuffix = ".mapping";
-    if (basePath.size() > mappingSuffix.size() && 
-        basePath.substr(basePath.size() - mappingSuffix.size()) == mappingSuffix) {
-        basePath = basePath.substr(0, basePath.size() - mappingSuffix.size());
-    }
-    
-    std::cerr << "writeFile: Processing " << size << " bytes, offset " << offset << std::endl;
-    std::cerr << "writeFile: Base path: " << basePath << std::endl;
-    
-    // For write operations, re-parse the entire file
-    if (offset == 0) {
-        // Full file write
-        std::cerr << "writeFile: Full file write, calling splitACCoefficientsExact" << std::endl;
-        splitACCoefficientsExact(buffer, size);
-        
-        std::cerr << "writeFile: After parsing - critical data size: " << criticalData.size() 
-                  << ", AC coefficient count: " << acCoefficientValues.size() << std::endl;
-        
-        // Write updated critical data to .crit file
-        std::string critPath = basePath + ".crit";
-        std::ofstream critFile(critPath, std::ios::binary);
-        if (critFile.is_open()) {
-            critFile.write(reinterpret_cast<const char*>(criticalData.data()), criticalData.size());
-            critFile.close();
-            std::cerr << "writeFile: Wrote " << criticalData.size() << " bytes to " << critPath << std::endl;
-        } else {
-            std::cerr << "writeFile: Failed to open " << critPath << " for writing" << std::endl;
-        }
-        
-        // Write updated AC coefficient data to .noncrit file
-        std::string noncritPath = basePath + ".noncrit";
-        std::ofstream noncritFile(noncritPath, std::ios::binary);
-        if (noncritFile.is_open()) {
-            noncritFile.write(reinterpret_cast<const char*>(acCoefficientValues.data()), 
-                             acCoefficientValues.size() * sizeof(int16_t));
-            noncritFile.close();
-            std::cerr << "writeFile: Wrote " << (acCoefficientValues.size() * sizeof(int16_t)) 
-                      << " bytes to " << noncritPath << " (" << acCoefficientValues.size() << " AC coefficients)" << std::endl;
-        } else {
-            std::cerr << "writeFile: Failed to open " << noncritPath << " for writing" << std::endl;
-        }
-    } else {
-        // Partial write - this is more complex and would require rebuilding the entire file
-        // For now, we'll re-parse the entire file
-        std::vector<uint8_t> currentData;
-        
-        // Read existing data
-        std::string critPath = basePath + ".crit";
-        std::ifstream critFile(critPath, std::ios::binary);
-        if (critFile.is_open()) {
-            std::vector<uint8_t> critData((std::istreambuf_iterator<char>(critFile)), {});
-            currentData.insert(currentData.end(), critData.begin(), critData.end());
-            critFile.close();
-        }
-        
-        std::string noncritPath = basePath + ".noncrit";
-        std::ifstream noncritFile(noncritPath, std::ios::binary);
-        if (noncritFile.is_open()) {
-            std::vector<uint8_t> noncritData((std::istreambuf_iterator<char>(noncritFile)), {});
-            currentData.insert(currentData.end(), noncritData.begin(), noncritData.end());
-            noncritFile.close();
-        }
-        
-        // Ensure we have enough space
-        if (offset + size > currentData.size()) {
-            currentData.resize(offset + size);
-        }
-        
-        // Apply the write
-        std::memcpy(currentData.data() + offset, buffer, size);
-        
-        // Re-parse the data
-        splitACCoefficientsExact(reinterpret_cast<const char*>(currentData.data()), currentData.size());
-        
-        // Write updated files
-        std::ofstream critFileOut(critPath, std::ios::binary);
-        if (critFileOut.is_open()) {
-            critFileOut.write(reinterpret_cast<const char*>(criticalData.data()), criticalData.size());
-            critFileOut.close();
-        }
-        
-        std::ofstream noncritFileOut(noncritPath, std::ios::binary);
-        if (noncritFileOut.is_open()) {
-            noncritFileOut.write(reinterpret_cast<const char*>(acCoefficientValues.data()), acCoefficientValues.size() * sizeof(int16_t));
-            noncritFileOut.close();
-        }
-    }
-    
+ResultCode JpegFileHandler::createMapping(const char* buffer, size_t size) {
+    // For this approach, mapping is not used, so just return SUCCESS
     return ResultCode::SUCCESS;
 }
