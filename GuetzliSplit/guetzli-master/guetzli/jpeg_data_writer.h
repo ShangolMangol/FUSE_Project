@@ -178,6 +178,12 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
                               const SplitMergeOptions* split_merge_opts,
                               void* noncrit_bits);
 
+void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer);
+void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader);
+
 }  // namespace guetzli
 
 #endif  // GUETZLI_JPEG_DATA_WRITER_H_
+
+// Add extern declaration for GuetzliStringOut
+extern int GuetzliStringOut(void* data, const uint8_t* buf, size_t count);

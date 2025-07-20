@@ -16,8 +16,6 @@
 
 #include "guetzli/jpeg_data_writer.h"
 #include "guetzli/jpeg_data_reader.h"
-#include "guetzli/processor.h" // for GuetzliStringOut
-int GuetzliStringOut(void* data, const uint8_t* buf, size_t count);
 
 using namespace guetzli;
 
@@ -38,8 +36,6 @@ namespace guetzli {
 
 // namespace {
 
-void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer);
-void ReadACBitsFromNoncrit(coeff_t* block, SimpleBitReader* reader);
 
 static const int kJpegPrecision = 8;
 
