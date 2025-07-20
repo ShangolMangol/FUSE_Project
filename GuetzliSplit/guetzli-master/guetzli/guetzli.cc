@@ -242,6 +242,11 @@ int main(int argc, char** argv) {
   int split_jpeg = 0;
   int merge_jpeg = 0;
 
+  std::string in_data;
+  std::string out_data;
+  guetzli::Params params;
+  guetzli::ProcessStats stats;
+
   int opt_idx = 1;
   for(;opt_idx < argc;opt_idx++) {
     if (strnlen(argv[opt_idx], 2) < 2 || argv[opt_idx][0] != '-' || argv[opt_idx][1] != '-')
