@@ -31,7 +31,7 @@ typedef guetzli::SplitMergeOptions SplitMergeOptions;
 
 namespace guetzli {
 
-namespace {
+// namespace {
 
 static const int kJpegPrecision = 8;
 
@@ -184,7 +184,7 @@ void BuildHuffmanCodeTable(const int* counts, const int* values,
   }
 }
 
-}  // namespace
+// }  // namespace
 
 // Updates ac_histogram with the counts of the AC symbols that will be added by
 // a sequential jpeg encoder for this block. Every symbol is counted twice so
@@ -359,7 +359,7 @@ size_t EstimateJpegDataSize(const int num_components,
                             depth));
 }
 
-namespace {
+// namespace {
 
 // Writes DHT and SOS marker segments to out and fills in DC/AC Huffman tables
 // for each component of the image.
@@ -689,21 +689,21 @@ bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_p
     return true;
 }
 
-bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
-               const SplitMergeOptions* split_merge_opts) {
+bool WriteJpeg(const guetzli::JPEGData& jpg, bool strip_metadata, guetzli::JPEGOutput out,
+               const guetzli::SplitMergeOptions* split_merge_opts) {
   static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
   static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
-  std::vector<HuffmanCodeTable> dc_codes;
-  std::vector<HuffmanCodeTable> ac_codes;
+  std::vector<guetzli::HuffmanCodeTable> dc_codes;
+  std::vector<guetzli::HuffmanCodeTable> ac_codes;
   // Use split_merge_opts in the scan/entropy-coded data writing logic
-  return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
-          EncodeMetadata(jpg, strip_metadata, out) &&
-          EncodeDQT(jpg.quant, out) &&
-          EncodeSOF(jpg, out) &&
-          BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
-          EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
-          JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
-          (strip_metadata || JPEGWrite(out, jpg.tail_data)));
+  return (guetzli::JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
+          guetzli::EncodeMetadata(jpg, strip_metadata, out) &&
+          guetzli::EncodeDQT(jpg.quant, out) &&
+          guetzli::EncodeSOF(jpg, out) &&
+          guetzli::BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
+          guetzli::EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
+          guetzli::JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
+          (strip_metadata || guetzli::JPEGWrite(out, jpg.tail_data)));
 }
 
 int NullOut(void* data, const uint8_t* buf, size_t count) {
@@ -711,12 +711,12 @@ int NullOut(void* data, const uint8_t* buf, size_t count) {
 }
 
 void BuildSequentialHuffmanCodes(
-    const JPEGData& jpg,
-    std::vector<HuffmanCodeTable>* dc_huffman_code_tables,
-    std::vector<HuffmanCodeTable>* ac_huffman_code_tables) {
-  JPEGOutput out(NullOut, nullptr);
-  BuildAndEncodeHuffmanCodes(jpg, out, dc_huffman_code_tables,
+    const guetzli::JPEGData& jpg,
+    std::vector<guetzli::HuffmanCodeTable>* dc_huffman_code_tables,
+    std::vector<guetzli::HuffmanCodeTable>* ac_huffman_code_tables) {
+  guetzli::JPEGOutput out(NullOut, nullptr);
+  guetzli::BuildAndEncodeHuffmanCodes(jpg, out, dc_huffman_code_tables,
                              ac_huffman_code_tables);
 }
 
-}  // namespace guetzli
+// }  // namespace guetzli
