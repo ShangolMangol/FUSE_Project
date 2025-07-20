@@ -491,6 +491,7 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
         bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
         // Write ZRL symbol to noncrit (as a marker, 0)
         uint8_t marker = 0; fwrite(&marker, 1, 1, noncrit_file);
+        fprintf(stderr, "[DEBUG] Writing ZRL marker to noncrit\n");
         r -= 16;
       }
       int nbits = Log2FloorNonZero(abs(temp)) + 1;
@@ -502,14 +503,13 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       fwrite(&nbits_byte, 1, 1, noncrit_file);
       uint32_t ac_bits = (temp < 0) ? (~temp) : temp;
       fwrite(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
+      fprintf(stderr, "[DEBUG] Writing AC bits to noncrit: nbits=%d, value=%d\n", nbits, temp);
       r = 0;
     } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
       // MERGE MODE: Read AC bits from noncrit_file, write to BitWriter
-      // Read nbits
       uint8_t nbits_byte = 0;
       size_t _ = fread(&nbits_byte, 1, 1, noncrit_file);
       if (nbits_byte == 0) {
-        // ZRL marker
         bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
         r -= 16;
         continue;
@@ -517,7 +517,6 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       int nbits = nbits_byte;
       int symbol = (r << 4) + nbits;
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      // Read the actual bits
       uint32_t ac_bits = 0;
       _ = fread(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
       bw->WriteBits(nbits, ac_bits);
@@ -548,12 +547,11 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
   }
   if (r > 0) {
     if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
-      // Write EOB to crit, marker to noncrit
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
       uint8_t marker = 0xFF; // EOB marker
       fwrite(&marker, 1, 1, noncrit_file);
+      fprintf(stderr, "[DEBUG] Writing EOB marker to noncrit\n");
     } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
-      // Read and ignore EOB marker
       uint8_t marker = 0;
       size_t _ = fread(&marker, 1, 1, noncrit_file);
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
@@ -568,15 +566,17 @@ bool EncodeScan(const JPEGData& jpg,
                 const std::vector<HuffmanCodeTable>& dc_huff_table,
                 const std::vector<HuffmanCodeTable>& ac_huff_table,
                 JPEGOutput out,
-                const SplitMergeOptions* split_merge_opts = nullptr) {
+                const SplitMergeOptions* split_merge_opts) {
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
   FILE* noncrit_file = nullptr;
-  if (split_merge_opts && split_merge_opts->split_jpeg && split_merge_opts->noncrit_path) {
-    noncrit_file = fopen(split_merge_opts->noncrit_path, "wb");
+  if (split_merge_opts && split_merge_opts->split_jpeg && split_merge_opts->noncrit_path.c_str()) {
+    noncrit_file = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
     if (!noncrit_file) {
       fprintf(stderr, "Failed to open noncrit file for writing\n");
       return false;
+    } else {
+      fprintf(stderr, "[DEBUG] Opened noncrit file for writing: %s\n", split_merge_opts->noncrit_path.c_str());
     }
   }
   // TODO: In merge mode, open noncrit_file for reading
@@ -600,6 +600,7 @@ bool EncodeScan(const JPEGData& jpg,
         }
       }
       if (bw.pos > (1 << 16)) {
+        fprintf(stderr, "[DEBUG] Writing to crit (main JPEG output)\n");
         if (!JPEGWrite(out, bw.data.get(), bw.pos)) {
           if (noncrit_file) fclose(noncrit_file);
           return false;
@@ -610,6 +611,7 @@ bool EncodeScan(const JPEGData& jpg,
   }
   bw.JumpToByteBoundary();
   if (noncrit_file) fclose(noncrit_file);
+  fprintf(stderr, "[DEBUG] Final write to crit (main JPEG output)\n");
   return !bw.overflow && JPEGWrite(out, bw.data.get(), bw.pos);
 }
 
