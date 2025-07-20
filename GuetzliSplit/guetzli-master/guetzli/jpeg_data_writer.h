@@ -116,6 +116,67 @@ void UpdateACHistogramForDCTBlock(const coeff_t* coeffs,
 size_t ClusterHistograms(JpegHistogram* histo, size_t* num, int* histo_indexes,
                          uint8_t* depths);
 
+// Bit-level writer for .noncrit file
+struct SimpleBitWriter {
+  std::vector<uint8_t> data;
+  uint8_t cur_byte = 0;
+  int bit_pos = 0; // 0-7
+  void WriteBits(uint32_t bits, int nbits) {
+    for (int i = nbits - 1; i >= 0; --i) {
+      cur_byte = (cur_byte << 1) | ((bits >> i) & 1);
+      bit_pos++;
+      if (bit_pos == 8) {
+        data.push_back(cur_byte);
+        cur_byte = 0;
+        bit_pos = 0;
+      }
+    }
+  }
+  void Flush() {
+    if (bit_pos > 0) {
+      cur_byte <<= (8 - bit_pos);
+      data.push_back(cur_byte);
+      cur_byte = 0;
+      bit_pos = 0;
+    }
+  }
+  void WriteToFile(FILE* f) {
+    Flush();
+    fwrite(data.data(), 1, data.size(), f);
+  }
+};
+
+// Bit-level reader for .noncrit file
+struct SimpleBitReader {
+  const uint8_t* data;
+  size_t size;
+  size_t byte_pos = 0;
+  int bit_pos = 0; // 0-7
+  SimpleBitReader(const uint8_t* d, size_t s) : data(d), size(s) {}
+  uint32_t ReadBits(int nbits) {
+    uint32_t val = 0;
+    for (int i = 0; i < nbits; ++i) {
+      if (byte_pos >= size) return 0; // error
+      val = (val << 1) | ((data[byte_pos] >> (7 - bit_pos)) & 1);
+      bit_pos++;
+      if (bit_pos == 8) {
+        bit_pos = 0;
+        byte_pos++;
+      }
+    }
+    return val;
+  }
+};
+
+// Update signature to accept void* for noncrit_bits
+void EncodeDCTBlockSequential(const coeff_t* coeffs,
+                              const HuffmanCodeTable& dc_huff,
+                              const HuffmanCodeTable& ac_huff,
+                              coeff_t* last_dc_coeff,
+                              BitWriter* bw,
+                              const SplitMergeOptions* split_merge_opts,
+                              void* noncrit_bits);
+
 }  // namespace guetzli
 
 #endif  // GUETZLI_JPEG_DATA_WRITER_H_

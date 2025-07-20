@@ -457,14 +457,14 @@ bool BuildAndEncodeHuffmanCodes(const JPEGData& jpg, JPEGOutput out,
   return JPEGWrite(out, &data[0], data.size());
 }
 
-// Update EncodeDCTBlockSequential to accept split/merge options and file handles
+// Update EncodeDCTBlockSequential to accept split/merge options and bit writer/reader
 void EncodeDCTBlockSequential(const coeff_t* coeffs,
                               const HuffmanCodeTable& dc_huff,
                               const HuffmanCodeTable& ac_huff,
                               coeff_t* last_dc_coeff,
                               BitWriter* bw,
                               const SplitMergeOptions* split_merge_opts,
-                              FILE* noncrit_file) {
+                              void* noncrit_bits) {
   coeff_t temp2;
   coeff_t temp;
   temp2 = coeffs[0];
@@ -481,15 +481,9 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
   }
   int r = 0;
-  bool split_debug_printed = false;
   for (int k = 1; k < 64; ++k) {
     temp = coeffs[kJPEGNaturalOrder[k]];
-    // fprintf(stderr, "[DEBUG] AC coeff k=%d value=%d\n", k, temp);
-    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
-      if (!split_debug_printed) {
-        fprintf(stderr, "[DEBUG] Split mode active in EncodeDCTBlockSequential\n");
-        split_debug_printed = true;
-      }
+    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
       // SPLIT MODE: Write zeros in crit, real AC bits in noncrit
       if (temp == 0) {
         r++;
@@ -498,35 +492,33 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       while (r > 15) {
         // Write ZRL symbol (0xF0) to crit (encode as zero)
         bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-        // Write ZRL symbol to noncrit (as a marker, 0)
-        uint8_t marker = 0; fwrite(&marker, 1, 1, noncrit_file);
-        fprintf(stderr, "[DEBUG] Writing ZRL marker to noncrit\n");
         r -= 16;
       }
       int nbits = Log2FloorNonZero(abs(temp)) + 1;
       int symbol = (r << 4) + nbits;
-      // Write zero symbol to crit (encode as zero)
+      // Write symbol to crit
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      // Write real bits to noncrit
-      uint8_t nbits_byte = nbits;
-      fwrite(&nbits_byte, 1, 1, noncrit_file);
-      uint32_t ac_bits = (temp < 0) ? (~temp) : temp;
-      fwrite(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
-      fprintf(stderr, "[DEBUG] Writing AC bits to noncrit: nbits=%d, value=%d\n", nbits, temp);
+      // Write zero as value bits to crit
+      SimpleBitWriter* writer = reinterpret_cast<SimpleBitWriter*>(noncrit_bits);
+      uint32_t ac_bits = (temp < 0) ? (~(abs(temp)) & ((1 << nbits) - 1)) : (temp & ((1 << nbits) - 1));
+      writer->WriteBits(ac_bits, nbits);
       r = 0;
-    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
-      uint8_t nbits_byte = 0;
-      size_t _ = fread(&nbits_byte, 1, 1, noncrit_file);
-      if (nbits_byte == 0) {
-        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-        r -= 16;
+    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_bits) {
+      // MERGE MODE: Read value bits from noncrit and write to crit
+      if (temp == 0) {
+        r++;
         continue;
       }
-      int nbits = nbits_byte;
+      while (r > 15) {
+        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
+        r -= 16;
+      }
+      int nbits = Log2FloorNonZero(abs(temp)) + 1;
       int symbol = (r << 4) + nbits;
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      uint32_t ac_bits = 0;
-      _ = fread(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
+      // Read value bits from noncrit
+      SimpleBitReader* reader = reinterpret_cast<SimpleBitReader*>(noncrit_bits);
+      uint32_t ac_bits = reader->ReadBits(nbits);
       bw->WriteBits(nbits, ac_bits);
       r = 0;
     } else {
@@ -553,15 +545,12 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     }
   }
   if (r > 0) {
-    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
+    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-      uint8_t marker = 0xFF; // EOB marker
-      fwrite(&marker, 1, 1, noncrit_file);
-      fprintf(stderr, "[DEBUG] Writing EOB marker to noncrit\n");
-    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
-      uint8_t marker = 0;
-      size_t _ = fread(&marker, 1, 1, noncrit_file);
+      // No value bits for EOB
+    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_bits) {
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+      // No value bits for EOB
     } else {
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
     }
@@ -574,22 +563,30 @@ bool EncodeScan(const JPEGData& jpg,
                 const std::vector<HuffmanCodeTable>& ac_huff_table,
                 JPEGOutput out,
                 const SplitMergeOptions* split_merge_opts) {
-  fprintf(stderr, "[DEBUG] EncodeScan: split_merge_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_merge_opts, split_merge_opts ? split_merge_opts->split_jpeg : -1, split_merge_opts ? split_merge_opts->noncrit_path.c_str() : "(null)");
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
-  FILE* noncrit_file = nullptr;
-  printf("open nocrit condition: %d\n", split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty());
+  void* noncrit_bits = nullptr;
+  SimpleBitWriter writer;
+  std::vector<uint8_t> noncrit_buf;
+  SimpleBitReader* reader = nullptr;
   if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
-    noncrit_file = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
-    fprintf(stderr, "[DEBUG] noncrit_path: %s\n", split_merge_opts->noncrit_path.c_str());
-    if (!noncrit_file) {
-      fprintf(stderr, "Failed to open noncrit file for writing\n");
+    noncrit_bits = &writer;
+  } else if (split_merge_opts && split_merge_opts->merge_jpeg && !split_merge_opts->merge_noncrit_path.empty()) {
+    // Read .noncrit file into buffer
+    FILE* f = fopen(split_merge_opts->merge_noncrit_path.c_str(), "rb");
+    if (!f) {
+      fprintf(stderr, "Failed to open noncrit file for reading\n");
       return false;
-    } else {
-      fprintf(stderr, "[DEBUG] Opened noncrit file for writing: %s\n", split_merge_opts->noncrit_path.c_str());
     }
+    fseek(f, 0, SEEK_END);
+    size_t sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    noncrit_buf.resize(sz);
+    size_t _ = fread(noncrit_buf.data(), 1, sz, f);
+    fclose(f);
+    reader = new SimpleBitReader(noncrit_buf.data(), sz);
+    noncrit_bits = reader;
   }
-  // TODO: In merge mode, open noncrit_file for reading
   for (int mcu_y = 0; mcu_y < jpg.MCU_rows; ++mcu_y) {
     for (int mcu_x = 0; mcu_x < jpg.MCU_cols; ++mcu_x) {
       // Encode one MCU
@@ -605,14 +602,13 @@ bool EncodeScan(const JPEGData& jpg,
             const coeff_t* coeffs = &c.coeffs[block_idx << 6];
             EncodeDCTBlockSequential(coeffs, dc_huff_table[i], ac_huff_table[i],
                                      &last_dc_coeff[i], &bw,
-                                     split_merge_opts, noncrit_file);
+                                     split_merge_opts, noncrit_bits);
           }
         }
       }
       if (bw.pos > (1 << 16)) {
-        fprintf(stderr, "[DEBUG] Writing to crit (main JPEG output)\n");
         if (!JPEGWrite(out, bw.data.get(), bw.pos)) {
-          if (noncrit_file) fclose(noncrit_file);
+          if (reader) delete reader;
           return false;
         }
         bw.pos = 0;
@@ -620,8 +616,17 @@ bool EncodeScan(const JPEGData& jpg,
     }
   }
   bw.JumpToByteBoundary();
-  if (noncrit_file) fclose(noncrit_file);
-  fprintf(stderr, "[DEBUG] Final write to crit (main JPEG output)\n");
+  if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
+    // Write .noncrit file
+    FILE* f = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
+    if (!f) {
+      fprintf(stderr, "Failed to open noncrit file for writing\n");
+      return false;
+    }
+    writer.WriteToFile(f);
+    fclose(f);
+  }
+  if (reader) delete reader;
   return !bw.overflow && JPEGWrite(out, bw.data.get(), bw.pos);
 }
 
