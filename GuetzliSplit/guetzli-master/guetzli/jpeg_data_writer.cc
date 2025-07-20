@@ -576,6 +576,7 @@ bool EncodeScan(const JPEGData& jpg,
   FILE* noncrit_file = nullptr;
   if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
     noncrit_file = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
+    fprintf(stderr, "[DEBUG] noncrit_path: %s\n", split_merge_opts->noncrit_path.c_str());
     if (!noncrit_file) {
       fprintf(stderr, "Failed to open noncrit file for writing\n");
       return false;

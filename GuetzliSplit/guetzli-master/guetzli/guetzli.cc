@@ -216,7 +216,7 @@ void TerminateHandler() {
 void Usage() {
   fprintf(stderr,
       "Guetzli JPEG compressor. Usage: \n"
-      "guetzli [flags] input_filename output_filename [noncrit_filename]\n"
+      "guetzli [flags] input_filename output_filename\n"
       "\n"
       "Flags:\n"
       "  --verbose    - Print a verbose trace of all attempts to standard output.\n"
@@ -225,7 +225,7 @@ void Usage() {
       "  --memlimit M - Memory limit in MB. Guetzli will fail if unable to stay under\n"
       "                 the limit. Default limit is %d MB.\n"
       "  --nomemlimit - Do not limit memory usage.\n"
-      "  --split-jpeg - Write output as split .crit/.noncrit files. Optionally specify noncrit file.\n"
+      "  --split-jpeg - Write output as split .crit/.noncrit files.\n"
       "  --merge-jpeg - Merge .crit/.noncrit files into a JPEG.\n",
       kDefaultJPEGQuality, kDefaultMemlimitMB);
   exit(1);
@@ -241,11 +241,6 @@ int main(int argc, char** argv) {
   int memlimit_mb = kDefaultMemlimitMB;
   int split_jpeg = 0;
   int merge_jpeg = 0;
-
-  std::string in_data;
-  std::string out_data;
-  guetzli::Params params;
-  guetzli::ProcessStats stats;
 
   int opt_idx = 1;
   for(;opt_idx < argc;opt_idx++) {
@@ -278,6 +273,25 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (argc - opt_idx != 2) {
+    Usage();
+  }
+
+  std::string in_data = ReadFileOrDie(argv[opt_idx]);
+  std::string out_data;
+
+  guetzli::Params params;
+  params.butteraugli_target = static_cast<float>(
+      guetzli::ButteraugliScoreForQuality(quality));
+  params.split_jpeg = split_jpeg;
+  params.merge_jpeg = merge_jpeg;
+
+  guetzli::ProcessStats stats;
+
+  if (verbose) {
+    stats.debug_output_file = stderr;
+  }
+
   // SPLIT/MERGE FILE HANDLING
   guetzli::SplitMergeOptions split_opts;
   split_opts.split_jpeg = split_jpeg;
@@ -286,15 +300,10 @@ int main(int argc, char** argv) {
   if (split_jpeg) {
     // Output: output.crit, output.noncrit
     crit_path = argv[opt_idx + 1];
-    // If a third argument is provided, use it as noncrit_path
-    if (argc - opt_idx >= 3) {
-      noncrit_path = argv[opt_idx + 2];
-    } else {
-      size_t dot = crit_path.find_last_of('.');
-      if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
-      noncrit_path = crit_path + ".noncrit";
-      crit_path = crit_path + ".crit";
-    }
+    size_t dot = crit_path.find_last_of('.');
+    if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
+    noncrit_path = crit_path + ".noncrit";
+    crit_path = crit_path + ".crit";
     split_opts.crit_path = crit_path;
     split_opts.noncrit_path = noncrit_path;
     // Write crit file as main output
@@ -312,17 +321,6 @@ int main(int argc, char** argv) {
     // Read crit file as main input
     in_data = ReadFileOrDie(split_opts.merge_crit_path.c_str());
     out_data.clear();
-  }
-
-  // Update argument count check for split mode
-  if (split_jpeg) {
-    if (argc - opt_idx < 2 || argc - opt_idx > 3) {
-      Usage();
-    }
-  } else {
-    if (argc - opt_idx != 2) {
-      Usage();
-    }
   }
 
   static const unsigned char kPNGMagicBytes[] = {
