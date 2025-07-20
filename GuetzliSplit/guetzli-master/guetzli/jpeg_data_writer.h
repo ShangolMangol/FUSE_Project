@@ -28,6 +28,7 @@
 
 namespace guetzli {
 
+struct BitWriter;
 // Function pointer type used to write len bytes into buf. Returns the
 // number of bytes written or -1 on error.
 typedef int (*JPEGOutputHook)(void* data, const uint8_t* buf, size_t len);
