@@ -571,7 +571,7 @@ bool EncodeScan(const JPEGData& jpg,
                 const std::vector<HuffmanCodeTable>& ac_huff_table,
                 JPEGOutput out,
                 const SplitMergeOptions* split_merge_opts) {
-  fprintf(stderr, "[DEBUG] EncodeScan: split_merge_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_merge_opts, split_merge_opts ? split_merge_opts->split_jpeg : -1, split_merge_opts ? split_merge_opts->noncrit_path.c_str() : "(null)");
+  fprintf(stderr, "[DEBUG] EncodeScan: split_merge_opts=%p, split_jpeg=%d, merge_jpeg=%d, noncrit_path='%s'\n", (void*)split_merge_opts, split_merge_opts ? split_merge_opts->split_jpeg : -1, split_merge_opts ? split_merge_opts->merge_jpeg : -1, split_merge_opts ? split_merge_opts->noncrit_path.c_str() : "(null)");
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
   FILE* noncrit_file = nullptr;
@@ -584,6 +584,15 @@ bool EncodeScan(const JPEGData& jpg,
       return false;
     } else {
       fprintf(stderr, "[DEBUG] Opened noncrit file for writing: %s\n", split_merge_opts->noncrit_path.c_str());
+    }
+  }
+  if (split_merge_opts && split_merge_opts->merge_jpeg && !split_merge_opts->noncrit_path.empty()) {
+    noncrit_file = fopen(split_merge_opts->noncrit_path.c_str(), "rb");
+    if (!noncrit_file) {
+      fprintf(stderr, "Failed to open noncrit file for reading\n");
+      return false;
+    } else {
+      fprintf(stderr, "[DEBUG] Opened noncrit file for reading: %s\n", split_merge_opts->noncrit_path.c_str());
     }
   }
   // TODO: In merge mode, open noncrit_file for reading
