@@ -574,6 +574,7 @@ bool EncodeScan(const JPEGData& jpg,
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
   FILE* noncrit_file = nullptr;
+  printf("condition: %d\n", split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty());
   if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
     noncrit_file = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
     fprintf(stderr, "[DEBUG] noncrit_path: %s\n", split_merge_opts->noncrit_path.c_str());
