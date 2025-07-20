@@ -306,8 +306,20 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
-  // DEBUG PRINT
-  fprintf(stderr, "[DEBUG] main: &split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)&split_opts, split_opts.split_jpeg, split_opts.noncrit_path.c_str());
+
+  std::string in_data = ReadFileOrDie(argv[opt_idx]);
+  std::string out_data;
+
+  guetzli::Params params;
+  params.butteraugli_target = static_cast<float>(
+      guetzli::ButteraugliScoreForQuality(quality));
+  params.split_jpeg = split_jpeg;
+  params.merge_jpeg = merge_jpeg;
+
+  guetzli::ProcessStats stats;
+  if (verbose) {
+    stats.debug_output_file = stderr;
+  }
 
   static const unsigned char kPNGMagicBytes[] = {
       0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
