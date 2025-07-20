@@ -481,7 +481,7 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
   bool split_debug_printed = false;
   for (int k = 1; k < 64; ++k) {
     temp = coeffs[kJPEGNaturalOrder[k]];
-    fprintf(stderr, "[DEBUG] AC coeff k=%d value=%d\n", k, temp);
+    // fprintf(stderr, "[DEBUG] AC coeff k=%d value=%d\n", k, temp);
     if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
       if (!split_debug_printed) {
         fprintf(stderr, "[DEBUG] Split mode active in EncodeDCTBlockSequential\n");
