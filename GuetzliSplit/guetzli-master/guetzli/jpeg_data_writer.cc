@@ -24,6 +24,8 @@
 #include "guetzli/fast_log.h"
 #include "guetzli/jpeg_bit_writer.h"
 
+typedef guetzli::SplitMergeOptions SplitMergeOptions;
+
 namespace guetzli {
 
 namespace {
@@ -452,11 +454,14 @@ bool BuildAndEncodeHuffmanCodes(const JPEGData& jpg, JPEGOutput out,
   return JPEGWrite(out, &data[0], data.size());
 }
 
+// Update EncodeDCTBlockSequential to accept split/merge options and file handles
 void EncodeDCTBlockSequential(const coeff_t* coeffs,
                               const HuffmanCodeTable& dc_huff,
                               const HuffmanCodeTable& ac_huff,
                               coeff_t* last_dc_coeff,
-                              BitWriter* bw) {
+                              BitWriter* bw,
+                              const SplitMergeOptions* split_merge_opts,
+                              FILE* noncrit_file) {
   coeff_t temp2;
   coeff_t temp;
   temp2 = coeffs[0];
@@ -474,37 +479,107 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
   }
   int r = 0;
   for (int k = 1; k < 64; ++k) {
-    if ((temp = coeffs[kJPEGNaturalOrder[k]]) == 0) {
-      r++;
-      continue;
-    }
-    if (temp < 0) {
-      temp = -temp;
-      temp2 = ~temp;
+    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
+      // SPLIT MODE: Write zeros in crit, real AC bits in noncrit
+      temp = coeffs[kJPEGNaturalOrder[k]];
+      if (temp == 0) {
+        r++;
+        continue;
+      }
+      while (r > 15) {
+        // Write ZRL symbol (0xF0) to crit (encode as zero)
+        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
+        // Write ZRL symbol to noncrit (as a marker, 0)
+        uint8_t marker = 0; fwrite(&marker, 1, 1, noncrit_file);
+        r -= 16;
+      }
+      int nbits = Log2FloorNonZero(abs(temp)) + 1;
+      int symbol = (r << 4) + nbits;
+      // Write zero symbol to crit (encode as zero)
+      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+      // Write real bits to noncrit
+      uint8_t nbits_byte = nbits;
+      fwrite(&nbits_byte, 1, 1, noncrit_file);
+      uint32_t ac_bits = (temp < 0) ? (~temp) : temp;
+      fwrite(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
+      r = 0;
+    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
+      // MERGE MODE: Read AC bits from noncrit_file, write to BitWriter
+      // Read nbits
+      uint8_t nbits_byte = 0;
+      fread(&nbits_byte, 1, 1, noncrit_file);
+      if (nbits_byte == 0) {
+        // ZRL marker
+        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
+        r -= 16;
+        continue;
+      }
+      int nbits = nbits_byte;
+      int symbol = (r << 4) + nbits;
+      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+      // Read the actual bits
+      uint32_t ac_bits = 0;
+      fread(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
+      bw->WriteBits(nbits, ac_bits);
+      r = 0;
     } else {
-      temp2 = temp;
+      // NORMAL MODE: Write as usual
+      temp = coeffs[kJPEGNaturalOrder[k]];
+      if (temp == 0) {
+        r++;
+        continue;
+      }
+      if (temp < 0) {
+        temp = -temp;
+        temp2 = ~temp;
+      } else {
+        temp2 = temp;
+      }
+      while (r > 15) {
+        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
+        r -= 16;
+      }
+      int nbits = Log2FloorNonZero(temp) + 1;
+      int symbol = (r << 4) + nbits;
+      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+      bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
+      r = 0;
     }
-    while (r > 15) {
-      bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-      r -= 16;
-    }
-    int nbits = Log2FloorNonZero(temp) + 1;
-    int symbol = (r << 4) + nbits;
-    bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-    bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
-    r = 0;
   }
   if (r > 0) {
-    bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
+      // Write EOB to crit, marker to noncrit
+      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+      uint8_t marker = 0xFF; // EOB marker
+      fwrite(&marker, 1, 1, noncrit_file);
+    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
+      // Read and ignore EOB marker
+      uint8_t marker = 0;
+      fread(&marker, 1, 1, noncrit_file);
+      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+    } else {
+      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+    }
   }
 }
 
+// Update EncodeScan to accept split/merge options and file handles
 bool EncodeScan(const JPEGData& jpg,
                 const std::vector<HuffmanCodeTable>& dc_huff_table,
                 const std::vector<HuffmanCodeTable>& ac_huff_table,
-                JPEGOutput out) {
+                JPEGOutput out,
+                const SplitMergeOptions* split_merge_opts = nullptr) {
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
+  FILE* noncrit_file = nullptr;
+  if (split_merge_opts && split_merge_opts->split_jpeg && split_merge_opts->noncrit_path) {
+    noncrit_file = fopen(split_merge_opts->noncrit_path, "wb");
+    if (!noncrit_file) {
+      fprintf(stderr, "Failed to open noncrit file for writing\n");
+      return false;
+    }
+  }
+  // TODO: In merge mode, open noncrit_file for reading
   for (int mcu_y = 0; mcu_y < jpg.MCU_rows; ++mcu_y) {
     for (int mcu_x = 0; mcu_x < jpg.MCU_cols; ++mcu_x) {
       // Encode one MCU
@@ -519,12 +594,14 @@ bool EncodeScan(const JPEGData& jpg,
             int block_idx = block_y * c.width_in_blocks + block_x;
             const coeff_t* coeffs = &c.coeffs[block_idx << 6];
             EncodeDCTBlockSequential(coeffs, dc_huff_table[i], ac_huff_table[i],
-                                     &last_dc_coeff[i], &bw);
+                                     &last_dc_coeff[i], &bw,
+                                     split_merge_opts, noncrit_file);
           }
         }
       }
       if (bw.pos > (1 << 16)) {
         if (!JPEGWrite(out, bw.data.get(), bw.pos)) {
+          if (noncrit_file) fclose(noncrit_file);
           return false;
         }
         bw.pos = 0;
@@ -532,22 +609,25 @@ bool EncodeScan(const JPEGData& jpg,
     }
   }
   bw.JumpToByteBoundary();
+  if (noncrit_file) fclose(noncrit_file);
   return !bw.overflow && JPEGWrite(out, bw.data.get(), bw.pos);
 }
 
 }  // namespace
 
-bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out) {
+bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
+               const SplitMergeOptions* split_merge_opts) {
   static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
   static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
   std::vector<HuffmanCodeTable> dc_codes;
   std::vector<HuffmanCodeTable> ac_codes;
+  // TODO: Use split_merge_opts in the scan/entropy-coded data writing logic
   return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
           EncodeMetadata(jpg, strip_metadata, out) &&
           EncodeDQT(jpg.quant, out) &&
           EncodeSOF(jpg, out) &&
           BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
-          EncodeScan(jpg, dc_codes, ac_codes, out) &&
+          EncodeScan(jpg, dc_codes, ac_codes, out /*, split_merge_opts*/) &&
           JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
           (strip_metadata || JPEGWrite(out, jpg.tail_data)));
 }

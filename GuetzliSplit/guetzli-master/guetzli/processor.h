@@ -34,11 +34,15 @@ struct Params {
   bool use_silver_screen = false;
   int zeroing_greedy_lookahead = 3;
   bool new_zeroing_model = true;
+  // Added for split/merge JPEG functionality
+  bool split_jpeg = false;
+  bool merge_jpeg = false;
 };
 
 bool Process(const Params& params, ProcessStats* stats,
              const std::string& in_data,
-             std::string* out_data);
+             std::string* out_data,
+             const SplitMergeOptions* split_opts = nullptr);
 
 struct GuetzliOutput {
   std::string jpeg_data;
@@ -53,7 +57,8 @@ bool ProcessJpegData(const Params& params, const JPEGData& jpg_in,
 // visually indistinguishable from the input rgb image.
 bool Process(const Params& params, ProcessStats* stats,
              const std::vector<uint8_t>& rgb, int w, int h,
-             std::string* out);
+             std::string* out,
+             const SplitMergeOptions* split_opts = nullptr);
 
 }  // namespace guetzli
 

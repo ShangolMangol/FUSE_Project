@@ -25,6 +25,7 @@
 #include "png.h"
 #include "guetzli/jpeg_data.h"
 #include "guetzli/jpeg_data_reader.h"
+#include "guetzli/jpeg_data_writer.h"
 #include "guetzli/processor.h"
 #include "guetzli/quality.h"
 #include "guetzli/stats.h"
@@ -223,7 +224,10 @@ void Usage() {
       "                 Default value is %d.\n"
       "  --memlimit M - Memory limit in MB. Guetzli will fail if unable to stay under\n"
       "                 the limit. Default limit is %d MB.\n"
-      "  --nomemlimit - Do not limit memory usage.\n", kDefaultJPEGQuality, kDefaultMemlimitMB);
+      "  --nomemlimit - Do not limit memory usage.\n"
+      "  --split-jpeg - Write output as split .crit/.noncrit files.\n"
+      "  --merge-jpeg - Merge .crit/.noncrit files into a JPEG.\n",
+      kDefaultJPEGQuality, kDefaultMemlimitMB);
   exit(1);
 }
 
@@ -235,6 +239,8 @@ int main(int argc, char** argv) {
   int verbose = 0;
   int quality = kDefaultJPEGQuality;
   int memlimit_mb = kDefaultMemlimitMB;
+  int split_jpeg = 0;
+  int merge_jpeg = 0;
 
   int opt_idx = 1;
   for(;opt_idx < argc;opt_idx++) {
@@ -254,6 +260,10 @@ int main(int argc, char** argv) {
       memlimit_mb = atoi(argv[opt_idx]);
     } else if (!strcmp(argv[opt_idx], "--nomemlimit")) {
       memlimit_mb = -1;
+    } else if (!strcmp(argv[opt_idx], "--split-jpeg")) {
+      split_jpeg = 1;
+    } else if (!strcmp(argv[opt_idx], "--merge-jpeg")) {
+      merge_jpeg = 1;
     } else if (!strcmp(argv[opt_idx], "--")) {
       opt_idx++;
       break;
@@ -273,11 +283,44 @@ int main(int argc, char** argv) {
   guetzli::Params params;
   params.butteraugli_target = static_cast<float>(
       guetzli::ButteraugliScoreForQuality(quality));
+  params.split_jpeg = split_jpeg;
+  params.merge_jpeg = merge_jpeg;
 
   guetzli::ProcessStats stats;
 
   if (verbose) {
     stats.debug_output_file = stderr;
+  }
+
+  // SPLIT/MERGE FILE HANDLING
+  guetzli::SplitMergeOptions split_opts;
+  split_opts.split_jpeg = split_jpeg;
+  split_opts.merge_jpeg = merge_jpeg;
+  std::string crit_path, noncrit_path;
+  if (split_jpeg) {
+    // Output: output.crit, output.noncrit
+    crit_path = argv[opt_idx + 1];
+    size_t dot = crit_path.find_last_of('.');
+    if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
+    noncrit_path = crit_path + ".noncrit";
+    crit_path = crit_path + ".crit";
+    split_opts.crit_path = crit_path.c_str();
+    split_opts.noncrit_path = noncrit_path.c_str();
+    // Write crit file as main output
+    out_data.clear();
+  }
+  if (merge_jpeg) {
+    // Input: input.crit, input.noncrit; Output: merged.jpg
+    crit_path = argv[opt_idx];
+    size_t dot = crit_path.find_last_of('.');
+    if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
+    noncrit_path = crit_path + ".noncrit";
+    crit_path = crit_path + ".crit";
+    split_opts.merge_crit_path = crit_path.c_str();
+    split_opts.merge_noncrit_path = noncrit_path.c_str();
+    // Read crit file as main input
+    in_data = ReadFileOrDie(split_opts.merge_crit_path);
+    out_data.clear();
   }
 
   static const unsigned char kPNGMagicBytes[] = {
@@ -298,7 +341,7 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
       return 1;
     }
-    if (!guetzli::Process(params, &stats, rgb, xsize, ysize, &out_data)) {
+    if (!guetzli::Process(params, &stats, rgb, xsize, ysize, &out_data, &split_opts)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
@@ -315,12 +358,19 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
       return 1;
     }
-    if (!guetzli::Process(params, &stats, in_data, &out_data)) {
+    if (!guetzli::Process(params, &stats, in_data, &out_data, &split_opts)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
   }
 
-  WriteFileOrDie(argv[opt_idx + 1], out_data);
+  if (split_jpeg) {
+    WriteFileOrDie(split_opts.crit_path, out_data);
+    // .noncrit is already written by the encoder
+  } else if (merge_jpeg) {
+    WriteFileOrDie(argv[opt_idx + 1], out_data);
+  } else {
+    WriteFileOrDie(argv[opt_idx + 1], out_data);
+  }
   return 0;
 }

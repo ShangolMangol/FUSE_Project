@@ -31,6 +31,8 @@
 #include "guetzli/jpeg_data_writer.h"
 #include "guetzli/output_image.h"
 #include "guetzli/quantize.h"
+#include <string>
+#include <memory>
 
 namespace guetzli {
 
@@ -128,10 +130,14 @@ int GuetzliStringOut(void* data, const uint8_t* buf, size_t count) {
 }
 
 void Processor::OutputJpeg(const JPEGData& jpg,
-                           std::string* out) {
+                           std::string* out,
+                           const SplitMergeOptions* split_opts) {
   out->clear();
   JPEGOutput output(GuetzliStringOut, out);
-  if (!WriteJpeg(jpg, params_.clear_metadata, output)) {
+  SplitMergeOptions local_opts;
+  if (split_opts) local_opts = *split_opts;
+  if (!WriteJpeg(jpg, params_.clear_metadata, output,
+                 split_opts ? &local_opts : nullptr)) {
     assert(0);
   }
 }
@@ -888,10 +894,11 @@ bool ProcessJpegData(const Params& params, const JPEGData& jpg_in,
 }
 
 bool Process(const Params& params, ProcessStats* stats,
-             const std::string& data,
-             std::string* jpg_out) {
+             const std::string& in_data,
+             std::string* out_data,
+             const SplitMergeOptions* split_opts) {
   JPEGData jpg;
-  if (!ReadJpeg(data, JPEG_READ_ALL, &jpg)) {
+  if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
     return false;
   }
@@ -919,19 +926,20 @@ bool Process(const Params& params, ProcessStats* stats,
                                   params.butteraugli_target, stats));
   }
   bool ok = ProcessJpegData(params, jpg, comparator.get(), &out, stats);
-  *jpg_out = out.jpeg_data;
+  *out_data = out.jpeg_data;
   return ok;
 }
 
 bool Process(const Params& params, ProcessStats* stats,
              const std::vector<uint8_t>& rgb, int w, int h,
-             std::string* jpg_out) {
+             std::string* out,
+             const SplitMergeOptions* split_opts) {
   JPEGData jpg;
   if (!EncodeRGBToJpeg(rgb, w, h, &jpg)) {
     fprintf(stderr, "Could not create jpg data from rgb pixels\n");
     return false;
   }
-  GuetzliOutput out;
+  GuetzliOutput out_struct;
   ProcessStats dummy_stats;
   if (stats == nullptr) {
     stats = &dummy_stats;
@@ -942,8 +950,8 @@ bool Process(const Params& params, ProcessStats* stats,
         new ButteraugliComparator(jpg.width, jpg.height, &rgb,
                                   params.butteraugli_target, stats));
   }
-  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out, stats);
-  *jpg_out = out.jpeg_data;
+  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats);
+  *out = out_struct.jpeg_data;
   return ok;
 }
 
