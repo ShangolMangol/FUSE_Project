@@ -478,10 +478,16 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
   }
   int r = 0;
+  bool split_debug_printed = false;
   for (int k = 1; k < 64; ++k) {
+    temp = coeffs[kJPEGNaturalOrder[k]];
+    fprintf(stderr, "[DEBUG] AC coeff k=%d value=%d\n", k, temp);
     if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_file) {
+      if (!split_debug_printed) {
+        fprintf(stderr, "[DEBUG] Split mode active in EncodeDCTBlockSequential\n");
+        split_debug_printed = true;
+      }
       // SPLIT MODE: Write zeros in crit, real AC bits in noncrit
-      temp = coeffs[kJPEGNaturalOrder[k]];
       if (temp == 0) {
         r++;
         continue;
@@ -506,7 +512,6 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       fprintf(stderr, "[DEBUG] Writing AC bits to noncrit: nbits=%d, value=%d\n", nbits, temp);
       r = 0;
     } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
-      // MERGE MODE: Read AC bits from noncrit_file, write to BitWriter
       uint8_t nbits_byte = 0;
       size_t _ = fread(&nbits_byte, 1, 1, noncrit_file);
       if (nbits_byte == 0) {
@@ -523,7 +528,6 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       r = 0;
     } else {
       // NORMAL MODE: Write as usual
-      temp = coeffs[kJPEGNaturalOrder[k]];
       if (temp == 0) {
         r++;
         continue;
