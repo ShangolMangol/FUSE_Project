@@ -313,7 +313,7 @@ QuantData Processor::TryQuantMatrix(const JPEGData& jpg_in,
   {
     JPEGData jpg_out = jpg_in;
     img->SaveToJpegData(&jpg_out);
-    OutputJpeg(jpg_out, &encoded_jpg);
+    OutputJpeg(jpg_out, &encoded_jpg, nullptr);
   }
   GUETZLI_LOG(stats_, "Iter %2d: %s quantization matrix:\n",
               stats_->counters[kNumItersCnt] + 1,
@@ -767,7 +767,7 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
       {
         JPEGData jpg_out = jpg;
         img->SaveToJpegData(&jpg_out);
-        OutputJpeg(jpg_out, &encoded_jpg);
+        OutputJpeg(jpg_out, &encoded_jpg, nullptr);
       }
       GUETZLI_LOG(stats_,
                   "Iter %2d: %s(%d) %s Coeffs[%d/%zd] "
@@ -832,7 +832,7 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
   // Output the original image, in case we do not manage to create anything
   // with a good enough quality.
   std::string encoded_jpg;
-  OutputJpeg(jpg_in, &encoded_jpg);
+  OutputJpeg(jpg_in, &encoded_jpg, nullptr);
   final_output_->score = -1;
   GUETZLI_LOG(stats, "Original Out[%7zd]", encoded_jpg.size());
   if (comparator_ == nullptr) {
