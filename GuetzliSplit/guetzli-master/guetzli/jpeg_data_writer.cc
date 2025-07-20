@@ -19,6 +19,9 @@
 #include <assert.h>
 #include <cstdlib>
 #include <string.h>
+#include <cstdio>
+#include <vector>
+#include <string>
 
 #include "guetzli/entropy_encode.h"
 #include "guetzli/fast_log.h"
@@ -623,6 +626,63 @@ bool EncodeScan(const JPEGData& jpg,
 }
 
 }  // namespace
+
+
+static std::vector<uint8_t> ReadFileToVec(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return {};
+    fseek(f, 0, SEEK_END);
+    size_t sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> data(sz);
+    fread(data.data(), 1, sz, f);
+    fclose(f);
+    return data;
+}
+
+bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path) {
+    std::vector<uint8_t> crit = ReadFileToVec(crit_path);
+    std::vector<uint8_t> noncrit = ReadFileToVec(noncrit_path);
+    if (crit.empty() || noncrit.empty()) {
+        fprintf(stderr, "Failed to read crit or noncrit file\n");
+        return false;
+    }
+    // Find the SOS (Start of Scan) marker in crit
+    size_t sos_pos = 0;
+    for (size_t i = 0; i + 1 < crit.size(); ++i) {
+        if (crit[i] == 0xFF && crit[i+1] == 0xDA) {
+            sos_pos = i;
+            break;
+        }
+    }
+    if (sos_pos == 0) {
+        fprintf(stderr, "No SOS marker found in crit file\n");
+        return false;
+    }
+    // Find the start of entropy-coded data (after SOS header)
+    size_t entropy_start = sos_pos;
+    size_t sos_len = (crit[sos_pos+2] << 8) | crit[sos_pos+3];
+    entropy_start += 2 + sos_len;
+    // Find EOI (End of Image) marker
+    size_t eoi_pos = crit.size() - 2;
+    for (size_t i = crit.size() - 2; i > entropy_start; --i) {
+        if (crit[i] == 0xFF && crit[i+1] == 0xD9) {
+            eoi_pos = i;
+            break;
+        }
+    }
+    FILE* fout = fopen(out_path.c_str(), "wb");
+    if (!fout) {
+        fprintf(stderr, "Failed to open output file\n");
+        return false;
+    }
+    fwrite(crit.data(), 1, entropy_start, fout);
+    fwrite(noncrit.data(), 1, noncrit.size(), fout);
+    fwrite(crit.data() + eoi_pos, 1, crit.size() - eoi_pos, fout);
+    fclose(fout);
+    fprintf(stderr, "[DEBUG] Merged .crit and .noncrit into %s\n", out_path.c_str());
+    return true;
+}
 
 bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
                const SplitMergeOptions* split_merge_opts) {

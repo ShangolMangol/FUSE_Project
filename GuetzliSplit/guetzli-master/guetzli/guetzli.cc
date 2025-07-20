@@ -318,8 +318,8 @@ int main(int argc, char** argv) {
     crit_path = crit_path + ".crit";
     split_opts.merge_crit_path = crit_path;
     split_opts.merge_noncrit_path = noncrit_path;
-    // Read crit file as main input
-    in_data = ReadFileOrDie(split_opts.merge_crit_path.c_str());
+    // Do NOT try to read crit file as a normal JPEG here!
+    // Just pass the file paths to the merge logic.
     out_data.clear();
   }
   // DEBUG PRINT
@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
-  } else {
+  } else if (!merge_jpeg) { // Only try to parse as JPEG if NOT merging
     guetzli::JPEGData jpg_header;
     if (!guetzli::ReadJpeg(in_data, guetzli::JPEG_READ_HEADER, &jpg_header)) {
       fprintf(stderr, "Error reading JPG data from input file\n");
@@ -364,13 +364,22 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
+  } else { // merge_jpeg mode: just call Process with empty in_data
+    if (!guetzli::Process(params, &stats, std::string(), &out_data, &split_opts)) {
+      fprintf(stderr, "Guetzli processing failed (merge mode)\n");
+      return 1;
+    }
   }
 
   if (split_jpeg) {
     WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
     // .noncrit is already written by the encoder
   } else if (merge_jpeg) {
-    WriteFileOrDie(argv[opt_idx + 1], out_data);
+    if (!MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
+        fprintf(stderr, "Merge failed\n");
+        return 1;
+    }
+    return 0;
   } else {
     WriteFileOrDie(argv[opt_idx + 1], out_data);
   }
