@@ -52,7 +52,8 @@ struct GuetzliOutput {
 
 bool ProcessJpegData(const Params& params, const JPEGData& jpg_in,
                      Comparator* comparator, GuetzliOutput* out,
-                     ProcessStats* stats);
+                     ProcessStats* stats,
+                     const SplitMergeOptions* split_opts);
 
 // Sets *out to a jpeg encoded string that will decode to an image that is
 // visually indistinguishable from the input rgb image.

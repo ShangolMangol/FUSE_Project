@@ -796,7 +796,8 @@ bool IsGrayscale(const JPEGData& jpg) {
 
 bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
                                 Comparator* comparator, GuetzliOutput* out,
-                                ProcessStats* stats) {
+                                ProcessStats* stats,
+                                const SplitMergeOptions* split_opts) {
   params_ = params;
   comparator_ = comparator;
   final_output_ = out;
@@ -831,7 +832,7 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
   // Output the original image, in case we do not manage to create anything
   // with a good enough quality.
   std::string encoded_jpg;
-  OutputJpeg(jpg_in, &encoded_jpg, nullptr);
+  OutputJpeg(jpg_in, &encoded_jpg, split_opts);
   final_output_->score = -1;
   GUETZLI_LOG(stats, "Original Out[%7zd]", encoded_jpg.size());
   if (comparator_ == nullptr) {
@@ -925,7 +926,7 @@ bool Process(const Params& params, ProcessStats* stats,
         new ButteraugliComparator(jpg.width, jpg.height, &rgb,
                                   params.butteraugli_target, stats));
   }
-  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out, stats);
+  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out, stats, split_opts);
   *out_data = out.jpeg_data;
   return ok;
 }
@@ -952,7 +953,7 @@ bool Process(const Params& params, ProcessStats* stats,
         new ButteraugliComparator(jpg.width, jpg.height, &rgb,
                                   params.butteraugli_target, stats));
   }
-  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats);
+  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats, split_opts);
   *out = out_struct.jpeg_data;
   return ok;
 }
