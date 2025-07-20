@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <vector>
+#include <string>
 
 #include "guetzli/jpeg_data.h"
 
@@ -46,12 +47,10 @@ struct JPEGOutput {
 struct SplitMergeOptions {
   bool split_jpeg = false;
   bool merge_jpeg = false;
-  // If splitting, these are the output file paths
-  const char* crit_path = nullptr;
-  const char* noncrit_path = nullptr;
-  // If merging, these are the input file paths
-  const char* merge_crit_path = nullptr;
-  const char* merge_noncrit_path = nullptr;
+  std::string crit_path;
+  std::string noncrit_path;
+  std::string merge_crit_path;
+  std::string merge_noncrit_path;
 };
 
 // Updated WriteJpeg signature

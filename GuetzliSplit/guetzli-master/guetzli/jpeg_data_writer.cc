@@ -570,7 +570,7 @@ bool EncodeScan(const JPEGData& jpg,
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
   FILE* noncrit_file = nullptr;
-  if (split_merge_opts && split_merge_opts->split_jpeg && split_merge_opts->noncrit_path.c_str()) {
+  if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
     noncrit_file = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
     if (!noncrit_file) {
       fprintf(stderr, "Failed to open noncrit file for writing\n");
@@ -623,13 +623,13 @@ bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
   static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
   std::vector<HuffmanCodeTable> dc_codes;
   std::vector<HuffmanCodeTable> ac_codes;
-  // TODO: Use split_merge_opts in the scan/entropy-coded data writing logic
+  // Use split_merge_opts in the scan/entropy-coded data writing logic
   return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
           EncodeMetadata(jpg, strip_metadata, out) &&
           EncodeDQT(jpg.quant, out) &&
           EncodeSOF(jpg, out) &&
           BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
-          EncodeScan(jpg, dc_codes, ac_codes, out /*, split_merge_opts*/) &&
+          EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
           JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
           (strip_metadata || JPEGWrite(out, jpg.tail_data)));
 }

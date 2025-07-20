@@ -304,8 +304,8 @@ int main(int argc, char** argv) {
     if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
     noncrit_path = crit_path + ".noncrit";
     crit_path = crit_path + ".crit";
-    split_opts.crit_path = crit_path.c_str();
-    split_opts.noncrit_path = noncrit_path.c_str();
+    split_opts.crit_path = crit_path;
+    split_opts.noncrit_path = noncrit_path;
     // Write crit file as main output
     out_data.clear();
   }
@@ -316,10 +316,10 @@ int main(int argc, char** argv) {
     if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
     noncrit_path = crit_path + ".noncrit";
     crit_path = crit_path + ".crit";
-    split_opts.merge_crit_path = crit_path.c_str();
-    split_opts.merge_noncrit_path = noncrit_path.c_str();
+    split_opts.merge_crit_path = crit_path;
+    split_opts.merge_noncrit_path = noncrit_path;
     // Read crit file as main input
-    in_data = ReadFileOrDie(split_opts.merge_crit_path);
+    in_data = ReadFileOrDie(split_opts.merge_crit_path.c_str());
     out_data.clear();
   }
 
