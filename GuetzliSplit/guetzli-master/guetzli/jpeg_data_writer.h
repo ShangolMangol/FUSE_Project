@@ -57,6 +57,9 @@ struct SplitMergeOptions {
 bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
                const SplitMergeOptions* split_merge_opts = nullptr);
 
+// Declare merge function for split JPEGs
+bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path);
+
 struct HuffmanCodeTable {
   uint8_t depth[256];
   int code[256];

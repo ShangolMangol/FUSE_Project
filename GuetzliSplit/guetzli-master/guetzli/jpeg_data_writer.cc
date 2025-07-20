@@ -635,7 +635,7 @@ static std::vector<uint8_t> ReadFileToVec(const std::string& path) {
     size_t sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     std::vector<uint8_t> data(sz);
-    fread(data.data(), 1, sz, f);
+    size_t _ = fread(data.data(), 1, sz, f);
     fclose(f);
     return data;
 }
