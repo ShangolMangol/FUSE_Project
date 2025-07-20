@@ -571,6 +571,7 @@ bool EncodeScan(const JPEGData& jpg,
                 const std::vector<HuffmanCodeTable>& ac_huff_table,
                 JPEGOutput out,
                 const SplitMergeOptions* split_merge_opts) {
+  fprintf(stderr, "[DEBUG] EncodeScan: split_merge_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_merge_opts, split_merge_opts ? split_merge_opts->split_jpeg : -1, split_merge_opts ? split_merge_opts->noncrit_path.c_str() : "(null)");
   coeff_t last_dc_coeff[kMaxComponents] = { 0 };
   BitWriter bw(1 << 17);
   FILE* noncrit_file = nullptr;

@@ -132,8 +132,10 @@ int GuetzliStringOut(void* data, const uint8_t* buf, size_t count) {
 void Processor::OutputJpeg(const JPEGData& jpg,
                            std::string* out,
                            const SplitMergeOptions* split_opts) {
+  fprintf(stderr, "[DEBUG] OutputJpeg: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
   out->clear();
   JPEGOutput output(GuetzliStringOut, out);
+  fprintf(stderr, "[DEBUG] About to call WriteJpeg: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
   if (!WriteJpeg(jpg, params_.clear_metadata, output, split_opts)) {
     assert(0);
   }
@@ -894,6 +896,7 @@ bool Process(const Params& params, ProcessStats* stats,
              const std::string& in_data,
              std::string* out_data,
              const SplitMergeOptions* split_opts) {
+  fprintf(stderr, "[DEBUG] Process: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
   JPEGData jpg;
   if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
@@ -931,11 +934,13 @@ bool Process(const Params& params, ProcessStats* stats,
              const std::vector<uint8_t>& rgb, int w, int h,
              std::string* out,
              const SplitMergeOptions* split_opts) {
+  fprintf(stderr, "[DEBUG] Process: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
   JPEGData jpg;
   if (!EncodeRGBToJpeg(rgb, w, h, &jpg)) {
     fprintf(stderr, "Could not create jpg data from rgb pixels\n");
     return false;
   }
+  fprintf(stderr, "[DEBUG] Process: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
   GuetzliOutput out_struct;
   ProcessStats dummy_stats;
   if (stats == nullptr) {

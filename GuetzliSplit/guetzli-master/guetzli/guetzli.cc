@@ -306,8 +306,6 @@ int main(int argc, char** argv) {
     crit_path = crit_path + ".crit";
     split_opts.crit_path = crit_path;
     split_opts.noncrit_path = noncrit_path;
-    fprintf(stderr, "[DEBUG] split_opts.crit_path: %s\n", split_opts.crit_path.c_str());
-    fprintf(stderr, "[DEBUG] split_opts.noncrit_path: %s\n", split_opts.noncrit_path.c_str());
     // Write crit file as main output
     out_data.clear();
   }
@@ -324,6 +322,8 @@ int main(int argc, char** argv) {
     in_data = ReadFileOrDie(split_opts.merge_crit_path.c_str());
     out_data.clear();
   }
+  // DEBUG PRINT
+  fprintf(stderr, "[DEBUG] main: &split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)&split_opts, split_opts.split_jpeg, split_opts.noncrit_path.c_str());
 
   static const unsigned char kPNGMagicBytes[] = {
       0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
