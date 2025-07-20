@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
   }
 
   if (split_jpeg) {
-    WriteFileOrDie(split_opts.crit_path, out_data);
+    WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
     // .noncrit is already written by the encoder
   } else if (merge_jpeg) {
     WriteFileOrDie(argv[opt_idx + 1], out_data);
