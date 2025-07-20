@@ -277,31 +277,6 @@ int main(int argc, char** argv) {
     Usage();
   }
 
-  if (merge_jpeg) {
-    // Input: input.crit, input.noncrit; Output: merged.jpg
-    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
-        fprintf(stderr, "Merge failed\n");
-        return 1;
-    }
-    return 0;
-  }
-
-  std::string in_data = ReadFileOrDie(argv[opt_idx]);
-  std::string out_data;
-
-  guetzli::Params params;
-  params.butteraugli_target = static_cast<float>(
-      guetzli::ButteraugliScoreForQuality(quality));
-  params.split_jpeg = split_jpeg;
-  params.merge_jpeg = merge_jpeg;
-
-  guetzli::ProcessStats stats;
-
-  if (verbose) {
-    stats.debug_output_file = stderr;
-  }
-
-  // SPLIT/MERGE FILE HANDLING
   guetzli::SplitMergeOptions split_opts;
   split_opts.split_jpeg = split_jpeg;
   split_opts.merge_jpeg = merge_jpeg;
@@ -315,8 +290,6 @@ int main(int argc, char** argv) {
     crit_path = crit_path + ".crit";
     split_opts.crit_path = crit_path;
     split_opts.noncrit_path = noncrit_path;
-    // Write crit file as main output
-    out_data.clear();
   }
   if (merge_jpeg) {
     // Input: input.crit, input.noncrit; Output: merged.jpg
@@ -327,9 +300,11 @@ int main(int argc, char** argv) {
     crit_path = crit_path + ".crit";
     split_opts.merge_crit_path = crit_path;
     split_opts.merge_noncrit_path = noncrit_path;
-    // Do NOT try to read crit file as a normal JPEG here!
-    // Just pass the file paths to the merge logic.
-    out_data.clear();
+    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
+        fprintf(stderr, "Merge failed\n");
+        return 1;
+    }
+    return 0;
   }
   // DEBUG PRINT
   fprintf(stderr, "[DEBUG] main: &split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)&split_opts, split_opts.split_jpeg, split_opts.noncrit_path.c_str());
