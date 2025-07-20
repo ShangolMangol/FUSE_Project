@@ -73,7 +73,7 @@ class Processor {
                            OutputImage* img);
   void MaybeOutput(const std::string& encoded_jpg);
   void DownsampleImage(OutputImage* img);
-  void OutputJpeg(const JPEGData& in, std::string* out);
+  void OutputJpeg(const JPEGData& jpg, std::string* out, const SplitMergeOptions* split_opts);
 
   Params params_;
   Comparator* comparator_;
