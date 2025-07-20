@@ -512,8 +512,13 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       fprintf(stderr, "[DEBUG] Writing AC bits to noncrit: nbits=%d, value=%d\n", nbits, temp);
       r = 0;
     } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
+      // MERGE MODE: Read AC bits from noncrit_file, write to BitWriter
       uint8_t nbits_byte = 0;
-      size_t _ = fread(&nbits_byte, 1, 1, noncrit_file);
+      size_t bytes_read = fread(&nbits_byte, 1, 1, noncrit_file);
+      if (bytes_read != 1) {
+        fprintf(stderr, "[ERROR] Unexpected end of .noncrit file (reading nbits)\n");
+        exit(1);
+      }
       if (nbits_byte == 0) {
         bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
         r -= 16;
@@ -523,7 +528,12 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       int symbol = (r << 4) + nbits;
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
       uint32_t ac_bits = 0;
-      _ = fread(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
+      size_t bytes_needed = (nbits + 7) / 8;
+      bytes_read = fread(&ac_bits, 1, bytes_needed, noncrit_file);
+      if (bytes_read != bytes_needed) {
+        fprintf(stderr, "[ERROR] Unexpected end of .noncrit file (reading AC bits)\n");
+        exit(1);
+      }
       bw->WriteBits(nbits, ac_bits);
       r = 0;
     } else {
@@ -557,7 +567,11 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       fprintf(stderr, "[DEBUG] Writing EOB marker to noncrit\n");
     } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
       uint8_t marker = 0;
-      size_t _ = fread(&marker, 1, 1, noncrit_file);
+      size_t bytes_read = fread(&marker, 1, 1, noncrit_file);
+      if (bytes_read != 1) {
+        fprintf(stderr, "[ERROR] Unexpected end of .noncrit file (reading EOB marker)\n");
+        exit(1);
+      }
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
     } else {
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
