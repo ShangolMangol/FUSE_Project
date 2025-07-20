@@ -306,6 +306,8 @@ int main(int argc, char** argv) {
     crit_path = crit_path + ".crit";
     split_opts.crit_path = crit_path;
     split_opts.noncrit_path = noncrit_path;
+    fprintf(stderr, "[DEBUG] split_opts.crit_path: %s\n", split_opts.crit_path.c_str());
+    fprintf(stderr, "[DEBUG] split_opts.noncrit_path: %s\n", split_opts.noncrit_path.c_str());
     // Write crit file as main output
     out_data.clear();
   }
