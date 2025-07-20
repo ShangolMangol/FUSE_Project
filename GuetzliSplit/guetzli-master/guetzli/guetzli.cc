@@ -318,8 +318,6 @@ int main(int argc, char** argv) {
     crit_path = crit_path + ".crit";
     split_opts.merge_crit_path = crit_path;
     split_opts.merge_noncrit_path = noncrit_path;
-    split_opts.merge_jpeg = 1;
-    split_opts.noncrit_path = noncrit_path;
     // Read crit file as main input
     in_data = ReadFileOrDie(split_opts.merge_crit_path.c_str());
     out_data.clear();
