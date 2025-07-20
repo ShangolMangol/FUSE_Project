@@ -15,6 +15,11 @@
  */
 
 #include "guetzli/jpeg_data_writer.h"
+#include "guetzli/jpeg_data_reader.h"
+#include "guetzli/processor.h" // for GuetzliStringOut
+int GuetzliStringOut(void* data, const uint8_t* buf, size_t count);
+
+using namespace guetzli;
 
 #include <assert.h>
 #include <cstdlib>
@@ -481,30 +486,39 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
   }
   int r = 0;
-  for (int k = 1; k < 64; ++k) {
-    temp = coeffs[kJPEGNaturalOrder[k]];
-    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
-      // SPLIT MODE: Write zeros in crit, real AC bits in noncrit
+  if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
+    // SPLIT MODE: Write zeros in crit, real AC bits in noncrit
+    SimpleBitWriter* writer = reinterpret_cast<SimpleBitWriter*>(noncrit_bits);
+    WriteACBitsToNoncrit(coeffs, writer);
+    for (int k = 1; k < 64; ++k) {
+      temp = coeffs[kJPEGNaturalOrder[k]];
       if (temp == 0) {
         r++;
         continue;
       }
       while (r > 15) {
-        // Write ZRL symbol (0xF0) to crit (encode as zero)
         bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
         r -= 16;
       }
       int nbits = Log2FloorNonZero(abs(temp)) + 1;
       int symbol = (r << 4) + nbits;
-      // Write symbol to crit
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      // Write zero as value bits to crit
-      SimpleBitWriter* writer = reinterpret_cast<SimpleBitWriter*>(noncrit_bits);
-      uint32_t ac_bits = (temp < 0) ? (~(abs(temp)) & ((1 << nbits) - 1)) : (temp & ((1 << nbits) - 1));
-      writer->WriteBits(ac_bits, nbits);
+      bw->WriteBits(nbits, 0); // Always write zero for value bits in crit
       r = 0;
-    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_bits) {
-      // MERGE MODE: Read value bits from noncrit and write to crit
+    }
+    if (r > 0) {
+      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+    }
+    return;
+  }
+  if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_bits) {
+    // MERGE MODE: Read value bits from noncrit and write to crit
+    SimpleBitReader* reader = reinterpret_cast<SimpleBitReader*>(noncrit_bits);
+    coeff_t block[64];
+    block[0] = *last_dc_coeff; // DC is already set
+    ReadACBitsFromNoncrit(block, reader);
+    for (int k = 1; k < 64; ++k) {
+      temp = block[kJPEGNaturalOrder[k]];
       if (temp == 0) {
         r++;
         continue;
@@ -516,44 +530,40 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       int nbits = Log2FloorNonZero(abs(temp)) + 1;
       int symbol = (r << 4) + nbits;
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      // Read value bits from noncrit
-      SimpleBitReader* reader = reinterpret_cast<SimpleBitReader*>(noncrit_bits);
-      uint32_t ac_bits = reader->ReadBits(nbits);
+      uint32_t ac_bits = (temp < 0) ? (~(abs(temp)) & ((1 << nbits) - 1)) : (temp & ((1 << nbits) - 1));
       bw->WriteBits(nbits, ac_bits);
       r = 0;
-    } else {
-      // NORMAL MODE: Write as usual
-      if (temp == 0) {
-        r++;
-        continue;
-      }
-      if (temp < 0) {
-        temp = -temp;
-        temp2 = ~temp;
-      } else {
-        temp2 = temp;
-      }
-      while (r > 15) {
-        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-        r -= 16;
-      }
-      int nbits = Log2FloorNonZero(temp) + 1;
-      int symbol = (r << 4) + nbits;
-      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
-      r = 0;
     }
+    if (r > 0) {
+      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+    }
+    return;
+  }
+  // NORMAL MODE: Write as usual
+  for (int k = 1; k < 64; ++k) {
+    temp = coeffs[kJPEGNaturalOrder[k]];
+    if (temp == 0) {
+      r++;
+      continue;
+    }
+    if (temp < 0) {
+      temp = -temp;
+      temp2 = ~temp;
+    } else {
+      temp2 = temp;
+    }
+    while (r > 15) {
+      bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
+      r -= 16;
+    }
+    int nbits = Log2FloorNonZero(temp) + 1;
+    int symbol = (r << 4) + nbits;
+    bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+    bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
+    r = 0;
   }
   if (r > 0) {
-    if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
-      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-      // No value bits for EOB
-    } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_bits) {
-      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-      // No value bits for EOB
-    } else {
-      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-    }
+    bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
   }
 }
 
@@ -645,45 +655,68 @@ static std::vector<uint8_t> ReadFileToVec(const std::string& path) {
     return data;
 }
 
+// Helper: Write nbits and value bits for each AC in split mode
+void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer) {
+    for (int k = 1; k < 64; ++k) {
+        int val = coeffs[kJPEGNaturalOrder[k]];
+        if (val == 0) {
+            writer->WriteBits(0, 4); // nbits = 0
+        } else {
+            int nbits = Log2FloorNonZero(abs(val)) + 1;
+            writer->WriteBits(nbits, 4); // Write nbits (4 bits)
+            uint32_t ac_bits = (val < 0) ? (~(abs(val)) & ((1 << nbits) - 1)) : (val & ((1 << nbits) - 1));
+            writer->WriteBits(ac_bits, nbits);
+        }
+    }
+}
+
+// Helper: Read nbits and value bits for each AC in merge mode
+void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader) {
+    for (int k = 1; k < 64; ++k) {
+        int nbits = reader->ReadBits(4);
+        if (nbits == 0) {
+            coeffs[kJPEGNaturalOrder[k]] = 0;
+        } else {
+            int val = reader->ReadBits(nbits);
+            // JPEG sign-magnitude to int
+            if (val < (1 << (nbits - 1)))
+                val -= (1 << nbits) - 1;
+            coeffs[kJPEGNaturalOrder[k]] = val;
+        }
+    }
+}
+
+// Real merge implementation
 bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path) {
-    std::vector<uint8_t> crit = ReadFileToVec(crit_path);
+    // 1. Read .crit as JPEGData
+    std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
+    std::string crit_data(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
+    JPEGData jpg;
+    if (!ReadJpeg(crit_data, JPEG_READ_ALL, &jpg)) {
+        fprintf(stderr, "Failed to parse crit JPEG\n");
+        return false;
+    }
+    // 2. Read .noncrit as bitstream
     std::vector<uint8_t> noncrit = ReadFileToVec(noncrit_path);
-    if (crit.empty() || noncrit.empty()) {
-        fprintf(stderr, "Failed to read crit or noncrit file\n");
-        return false;
-    }
-    // Find the SOS (Start of Scan) marker in crit
-    size_t sos_pos = 0;
-    for (size_t i = 0; i + 1 < crit.size(); ++i) {
-        if (crit[i] == 0xFF && crit[i+1] == 0xDA) {
-            sos_pos = i;
-            break;
+    SimpleBitReader reader(noncrit.data(), noncrit.size());
+    // 3. For each block, for each AC, set AC from .noncrit
+    for (auto& comp : jpg.components) {
+        for (size_t block = 0; block < comp.coeffs.size(); block += 64) {
+            coeff_t* block_ptr = &comp.coeffs[block];
+            // DC stays as in .crit
+            ReadACBitsFromNoncrit(block_ptr, &reader);
         }
     }
-    if (sos_pos == 0) {
-        fprintf(stderr, "No SOS marker found in crit file\n");
+    // 4. Write merged JPEG
+    std::string out_data;
+    JPEGOutput output(GuetzliStringOut, &out_data);
+    if (!WriteJpeg(jpg, false, output, nullptr)) {
+        fprintf(stderr, "Failed to write merged JPEG\n");
         return false;
-    }
-    // Find the start of entropy-coded data (after SOS header)
-    size_t entropy_start = sos_pos;
-    size_t sos_len = (crit[sos_pos+2] << 8) | crit[sos_pos+3];
-    entropy_start += 2 + sos_len;
-    // Find EOI (End of Image) marker
-    size_t eoi_pos = crit.size() - 2;
-    for (size_t i = crit.size() - 2; i > entropy_start; --i) {
-        if (crit[i] == 0xFF && crit[i+1] == 0xD9) {
-            eoi_pos = i;
-            break;
-        }
     }
     FILE* fout = fopen(out_path.c_str(), "wb");
-    if (!fout) {
-        fprintf(stderr, "Failed to open output file\n");
-        return false;
-    }
-    fwrite(crit.data(), 1, entropy_start, fout);
-    fwrite(noncrit.data(), 1, noncrit.size(), fout);
-    fwrite(crit.data() + eoi_pos, 1, crit.size() - eoi_pos, fout);
+    if (!fout) return false;
+    fwrite(out_data.data(), 1, out_data.size(), fout);
     fclose(fout);
     fprintf(stderr, "[DEBUG] Merged .crit and .noncrit into %s\n", out_path.c_str());
     return true;
@@ -710,44 +743,35 @@ bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
 }
 
 bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path) {
-    std::vector<uint8_t> crit = ReadFileToVec(crit_path);
+    // 1. Read .crit as JPEGData
+    std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
+    std::string crit_data(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
+    JPEGData jpg;
+    if (!ReadJpeg(crit_data, JPEG_READ_ALL, &jpg)) {
+        fprintf(stderr, "Failed to parse crit JPEG\n");
+        return false;
+    }
+    // 2. Read .noncrit as bitstream
     std::vector<uint8_t> noncrit = ReadFileToVec(noncrit_path);
-    if (crit.empty() || noncrit.empty()) {
-        fprintf(stderr, "Failed to read crit or noncrit file\n");
-        return false;
-    }
-    // Find the SOS (Start of Scan) marker in crit
-    size_t sos_pos = 0;
-    for (size_t i = 0; i + 1 < crit.size(); ++i) {
-        if (crit[i] == 0xFF && crit[i+1] == 0xDA) {
-            sos_pos = i;
-            break;
+    SimpleBitReader reader(noncrit.data(), noncrit.size());
+    // 3. For each block, for each AC, set AC from .noncrit
+    for (auto& comp : jpg.components) {
+        for (size_t block = 0; block < comp.coeffs.size(); block += 64) {
+            coeff_t* block_ptr = &comp.coeffs[block];
+            // DC stays as in .crit
+            ReadACBitsFromNoncrit(block_ptr, &reader);
         }
     }
-    if (sos_pos == 0) {
-        fprintf(stderr, "No SOS marker found in crit file\n");
+    // 4. Write merged JPEG
+    std::string out_data;
+    JPEGOutput output(GuetzliStringOut, &out_data);
+    if (!WriteJpeg(jpg, false, output, nullptr)) {
+        fprintf(stderr, "Failed to write merged JPEG\n");
         return false;
-    }
-    // Find the start of entropy-coded data (after SOS header)
-    size_t entropy_start = sos_pos;
-    size_t sos_len = (crit[sos_pos+2] << 8) | crit[sos_pos+3];
-    entropy_start += 2 + sos_len;
-    // Find EOI (End of Image) marker
-    size_t eoi_pos = crit.size() - 2;
-    for (size_t i = crit.size() - 2; i > entropy_start; --i) {
-        if (crit[i] == 0xFF && crit[i+1] == 0xD9) {
-            eoi_pos = i;
-            break;
-        }
     }
     FILE* fout = fopen(out_path.c_str(), "wb");
-    if (!fout) {
-        fprintf(stderr, "Failed to open output file\n");
-        return false;
-    }
-    fwrite(crit.data(), 1, entropy_start, fout);
-    fwrite(noncrit.data(), 1, noncrit.size(), fout);
-    fwrite(crit.data() + eoi_pos, 1, crit.size() - eoi_pos, fout);
+    if (!fout) return false;
+    fwrite(out_data.data(), 1, out_data.size(), fout);
     fclose(fout);
     fprintf(stderr, "[DEBUG] Merged .crit and .noncrit into %s\n", out_path.c_str());
     return true;

@@ -34,6 +34,8 @@
 #include <string>
 #include <memory>
 
+int GuetzliStringOut(void* data, const uint8_t* buf, size_t count);
+
 namespace guetzli {
 
 namespace {
