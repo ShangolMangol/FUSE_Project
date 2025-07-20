@@ -134,10 +134,7 @@ void Processor::OutputJpeg(const JPEGData& jpg,
                            const SplitMergeOptions* split_opts) {
   out->clear();
   JPEGOutput output(GuetzliStringOut, out);
-  SplitMergeOptions local_opts;
-  if (split_opts) local_opts = *split_opts;
-  if (!WriteJpeg(jpg, params_.clear_metadata, output,
-                 split_opts ? &local_opts : nullptr)) {
+  if (!WriteJpeg(jpg, params_.clear_metadata, output, split_opts)) {
     assert(0);
   }
 }
