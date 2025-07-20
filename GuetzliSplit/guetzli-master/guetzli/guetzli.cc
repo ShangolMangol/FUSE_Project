@@ -277,6 +277,15 @@ int main(int argc, char** argv) {
     Usage();
   }
 
+  if (merge_jpeg) {
+    // Input: input.crit, input.noncrit; Output: merged.jpg
+    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
+        fprintf(stderr, "Merge failed\n");
+        return 1;
+    }
+    return 0;
+  }
+
   std::string in_data = ReadFileOrDie(argv[opt_idx]);
   std::string out_data;
 
@@ -374,12 +383,6 @@ int main(int argc, char** argv) {
   if (split_jpeg) {
     WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
     // .noncrit is already written by the encoder
-  } else if (merge_jpeg) {
-    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
-        fprintf(stderr, "Merge failed\n");
-        return 1;
-    }
-    return 0;
   } else {
     WriteFileOrDie(argv[opt_idx + 1], out_data);
   }
