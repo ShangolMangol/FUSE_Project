@@ -689,34 +689,68 @@ bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_p
     return true;
 }
 
-bool WriteJpeg(const guetzli::JPEGData& jpg, bool strip_metadata, guetzli::JPEGOutput out,
-               const guetzli::SplitMergeOptions* split_merge_opts) {
-  static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
-  static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
-  std::vector<guetzli::HuffmanCodeTable> dc_codes;
-  std::vector<guetzli::HuffmanCodeTable> ac_codes;
-  // Use split_merge_opts in the scan/entropy-coded data writing logic
-  return (guetzli::JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
-          guetzli::EncodeMetadata(jpg, strip_metadata, out) &&
-          guetzli::EncodeDQT(jpg.quant, out) &&
-          guetzli::EncodeSOF(jpg, out) &&
-          guetzli::BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
-          guetzli::EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
-          guetzli::JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
-          (strip_metadata || guetzli::JPEGWrite(out, jpg.tail_data)));
+// Move WriteJpeg and MergeCritNoncrit into the guetzli namespace
+namespace guetzli {
+
+bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
+               const SplitMergeOptions* split_merge_opts) {
+    static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
+    static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
+    std::vector<HuffmanCodeTable> dc_codes;
+    std::vector<HuffmanCodeTable> ac_codes;
+    // Use split_merge_opts in the scan/entropy-coded data writing logic
+    return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
+            EncodeMetadata(jpg, strip_metadata, out) &&
+            EncodeDQT(jpg.quant, out) &&
+            EncodeSOF(jpg, out) &&
+            BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
+            EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
+            JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
+            (strip_metadata || JPEGWrite(out, jpg.tail_data)));
 }
 
-int NullOut(void* data, const uint8_t* buf, size_t count) {
-  return count;
+bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path) {
+    std::vector<uint8_t> crit = ReadFileToVec(crit_path);
+    std::vector<uint8_t> noncrit = ReadFileToVec(noncrit_path);
+    if (crit.empty() || noncrit.empty()) {
+        fprintf(stderr, "Failed to read crit or noncrit file\n");
+        return false;
+    }
+    // Find the SOS (Start of Scan) marker in crit
+    size_t sos_pos = 0;
+    for (size_t i = 0; i + 1 < crit.size(); ++i) {
+        if (crit[i] == 0xFF && crit[i+1] == 0xDA) {
+            sos_pos = i;
+            break;
+        }
+    }
+    if (sos_pos == 0) {
+        fprintf(stderr, "No SOS marker found in crit file\n");
+        return false;
+    }
+    // Find the start of entropy-coded data (after SOS header)
+    size_t entropy_start = sos_pos;
+    size_t sos_len = (crit[sos_pos+2] << 8) | crit[sos_pos+3];
+    entropy_start += 2 + sos_len;
+    // Find EOI (End of Image) marker
+    size_t eoi_pos = crit.size() - 2;
+    for (size_t i = crit.size() - 2; i > entropy_start; --i) {
+        if (crit[i] == 0xFF && crit[i+1] == 0xD9) {
+            eoi_pos = i;
+            break;
+        }
+    }
+    FILE* fout = fopen(out_path.c_str(), "wb");
+    if (!fout) {
+        fprintf(stderr, "Failed to open output file\n");
+        return false;
+    }
+    fwrite(crit.data(), 1, entropy_start, fout);
+    fwrite(noncrit.data(), 1, noncrit.size(), fout);
+    fwrite(crit.data() + eoi_pos, 1, crit.size() - eoi_pos, fout);
+    fclose(fout);
+    fprintf(stderr, "[DEBUG] Merged .crit and .noncrit into %s\n", out_path.c_str());
+    return true;
 }
 
-void BuildSequentialHuffmanCodes(
-    const guetzli::JPEGData& jpg,
-    std::vector<guetzli::HuffmanCodeTable>* dc_huffman_code_tables,
-    std::vector<guetzli::HuffmanCodeTable>* ac_huffman_code_tables) {
-  guetzli::JPEGOutput out(NullOut, nullptr);
-  guetzli::BuildAndEncodeHuffmanCodes(jpg, out, dc_huffman_code_tables,
-                             ac_huffman_code_tables);
-}
-
-// }  // namespace guetzli
+} // namespace guetzli
