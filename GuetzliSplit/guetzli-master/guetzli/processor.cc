@@ -53,7 +53,8 @@ class Processor {
  public:
   bool ProcessJpegData(const Params& params, const JPEGData& jpg_in,
                        Comparator* comparator, GuetzliOutput* out,
-                       ProcessStats* stats);
+                       ProcessStats* stats,
+                       const SplitMergeOptions* split_opts);
 
  private:
   void SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
@@ -884,78 +885,6 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
   }
 
   return true;
-}
-
-bool ProcessJpegData(const Params& params, const JPEGData& jpg_in,
-                     Comparator* comparator, GuetzliOutput* out,
-                     ProcessStats* stats) {
-  Processor processor;
-  return processor.ProcessJpegData(params, jpg_in, comparator, out, stats);
-}
-
-bool Process(const Params& params, ProcessStats* stats,
-             const std::string& in_data,
-             std::string* out_data,
-             const SplitMergeOptions* split_opts) {
-  fprintf(stderr, "[DEBUG] Process: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
-  JPEGData jpg;
-  if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
-    fprintf(stderr, "Can't read jpg data from input file\n");
-    return false;
-  }
-  if (!CheckJpegSanity(jpg)) {
-    fprintf(stderr, "Unsupported input JPEG (unexpectedly large coefficient "
-            "values).\n");
-    return false;
-  }
-  std::vector<uint8_t> rgb = DecodeJpegToRGB(jpg);
-  if (rgb.empty()) {
-    fprintf(stderr, "Unsupported input JPEG file (e.g. unsupported "
-            "downsampling mode).\nPlease provide the input image as "
-            "a PNG file.\n");
-    return false;
-  }
-  GuetzliOutput out;
-  ProcessStats dummy_stats;
-  if (stats == nullptr) {
-    stats = &dummy_stats;
-  }
-  std::unique_ptr<ButteraugliComparator> comparator;
-  if (jpg.width >= 32 && jpg.height >= 32) {
-    comparator.reset(
-        new ButteraugliComparator(jpg.width, jpg.height, &rgb,
-                                  params.butteraugli_target, stats));
-  }
-  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out, stats, split_opts);
-  *out_data = out.jpeg_data;
-  return ok;
-}
-
-bool Process(const Params& params, ProcessStats* stats,
-             const std::vector<uint8_t>& rgb, int w, int h,
-             std::string* out,
-             const SplitMergeOptions* split_opts) {
-  fprintf(stderr, "[DEBUG] Process: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
-  JPEGData jpg;
-  if (!EncodeRGBToJpeg(rgb, w, h, &jpg)) {
-    fprintf(stderr, "Could not create jpg data from rgb pixels\n");
-    return false;
-  }
-  fprintf(stderr, "[DEBUG] Process: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
-  GuetzliOutput out_struct;
-  ProcessStats dummy_stats;
-  if (stats == nullptr) {
-    stats = &dummy_stats;
-  }
-  std::unique_ptr<ButteraugliComparator> comparator;
-  if (jpg.width >= 32 && jpg.height >= 32) {
-    comparator.reset(
-        new ButteraugliComparator(jpg.width, jpg.height, &rgb,
-                                  params.butteraugli_target, stats));
-  }
-  bool ok = ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats, split_opts);
-  *out = out_struct.jpeg_data;
-  return ok;
 }
 
 }  // namespace guetzli
