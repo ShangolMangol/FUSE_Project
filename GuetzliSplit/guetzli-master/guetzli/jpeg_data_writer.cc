@@ -38,6 +38,9 @@ namespace guetzli {
 
 // namespace {
 
+void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer);
+void ReadACBitsFromNoncrit(coeff_t* block, SimpleBitReader* reader);
+
 static const int kJpegPrecision = 8;
 
 // Writes len bytes from buf, using the out callback.
@@ -704,7 +707,7 @@ bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_p
         for (size_t block = 0; block < comp.coeffs.size(); block += 64) {
             coeff_t* block_ptr = &comp.coeffs[block];
             // DC stays as in .crit
-            ReadACBitsFromNoncrit(block_ptr, &reader);
+            guetzli::ReadACBitsFromNoncrit(block_ptr, &reader);
         }
     }
     // 4. Write merged JPEG
