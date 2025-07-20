@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
     WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
     // .noncrit is already written by the encoder
   } else if (merge_jpeg) {
-    if (!MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
+    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
         fprintf(stderr, "Merge failed\n");
         return 1;
     }
