@@ -507,7 +507,7 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       // MERGE MODE: Read AC bits from noncrit_file, write to BitWriter
       // Read nbits
       uint8_t nbits_byte = 0;
-      fread(&nbits_byte, 1, 1, noncrit_file);
+      size_t _ = fread(&nbits_byte, 1, 1, noncrit_file);
       if (nbits_byte == 0) {
         // ZRL marker
         bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
@@ -519,7 +519,7 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
       bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
       // Read the actual bits
       uint32_t ac_bits = 0;
-      fread(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
+      _ = fread(&ac_bits, 1, (nbits + 7) / 8, noncrit_file);
       bw->WriteBits(nbits, ac_bits);
       r = 0;
     } else {
@@ -555,7 +555,7 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     } else if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_file) {
       // Read and ignore EOB marker
       uint8_t marker = 0;
-      fread(&marker, 1, 1, noncrit_file);
+      size_t _ = fread(&marker, 1, 1, noncrit_file);
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
     } else {
       bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);

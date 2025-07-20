@@ -23,6 +23,7 @@
 #include "guetzli/comparator.h"
 #include "guetzli/jpeg_data.h"
 #include "guetzli/stats.h"
+#include "guetzli/jpeg_data_writer.h"
 
 namespace guetzli {
 
