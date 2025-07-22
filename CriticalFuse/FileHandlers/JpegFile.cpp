@@ -7,6 +7,7 @@
 #include <iostream>
 #include <cstring>
 #include <string>
+#include <unistd.h>
 
 
 ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
@@ -25,7 +26,8 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         // split the file into .crit and .noncrit using GuetzliSplit
         std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --split " + basePath + " " + basePath + ".crit ";
         std::cout << "Executing split command: " << command << std::endl;
-        std::cout << "Current directory: " << getcwd(NULL, 0) << std::endl;
+        char cwd[1024]; getcwd(cwd, sizeof(cwd));
+        std::cout << "Current directory: " << cwd << std::endl;
         int ret = system(command.c_str());
         if (ret != 0) {
             return ResultCode::FAILURE;
@@ -47,7 +49,8 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     // merge the .crit and .noncrit files back into a JPEG
     std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --merge " + basePath + ".crit " + basePath + ".jpg";
     std::cout << "Executing merge command: " << command << std::endl;
-    std::cout << "Current directory: " << getcwd(NULL, 0) << std::endl;
+    char cwd[1024]; getcwd(cwd, sizeof(cwd));
+    std::cout << "Current directory: " << cwd << std::endl;
     int ret = system(command.c_str());
     if (ret != 0) {
         return ResultCode::FAILURE;

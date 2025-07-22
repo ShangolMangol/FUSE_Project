@@ -107,7 +107,7 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
+    std::cout << "Getting attributes for file: " << fpath << std::endl;
     // Check for mapping file first
     std::string mappingPath = std::string(fpath) + ".mapping";
     if (access(mappingPath.c_str(), F_OK) == 0) {
@@ -195,6 +195,7 @@ static int criticalfs_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 static int criticalfs_open(const char *path, struct fuse_file_info *fi) {
     (void) path;
     (void) fi;
+    std::cout << "Opening file: " << path << std::endl;
     return 0;
 }
 
@@ -202,7 +203,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
+    std::cout << "Reading from file: " << fpath << std::endl;
     // Check if this is a critical file
     std::string mappingPath = std::string(fpath) + ".mapping";
     if (access(mappingPath.c_str(), F_OK) == 0) {
@@ -275,7 +276,7 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
 static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
+    std::cout << "Creating file: " << fpath << std::endl;
     // Only create mapping for supported file types
     auto handler = getFileHandler(path);
     if (handler) {
@@ -308,7 +309,7 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
 static int criticalfs_unlink(const char *path) {
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-
+    std::cout << "Unlinking file: " << fpath << std::endl;
     // Check if this is a critical file
     auto handler = getFileHandler(path);
     if (handler) {
