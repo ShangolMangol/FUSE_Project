@@ -39,7 +39,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
     return ResultCode::SUCCESS;
 }
 
-ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size_t size, off_t offset) {
+ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size_t& size, off_t offset) {
     std::string basePath(mappingPath);
     const std::string suffix = ".mapping";
     if (basePath.size() >= suffix.size() && basePath.compare(basePath.size() - suffix.size(), suffix.size(), suffix) == 0) {
@@ -66,6 +66,7 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     std::cout << "Reading from file: " << basePath + ".jpg" << " with size: " << mergedImageSize << std::endl;
 
     mergedImage.close();
+    size = mergedImageSize;
 
     // remove the temporary file
     // unlink(basePath + ".jpg");

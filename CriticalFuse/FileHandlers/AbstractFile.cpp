@@ -112,7 +112,7 @@ ResultCode AbstractFileHandler::saveMapToFile(const char* mappingPath) {
     return ResultCode::SUCCESS;
 }
 
-ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, size_t size, off_t offset) {
+ResultCode AbstractFileHandler::readFile(const char* mappingPath, char* buffer, size_t& size, off_t offset) {
     // Load the mapping
     if (loadMapFromFile(mappingPath) != ResultCode::SUCCESS) {
         std::cerr << "Failed to load file map from: " << mappingPath << std::endl;

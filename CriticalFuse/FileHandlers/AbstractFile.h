@@ -65,11 +65,11 @@ public:
      * 
      * @param mappingPath - the path to the mapping file - to know where the content is stored
      * @param buffer buffer to read into
-     * @param size size of the buffer
+     * @param size (in/out) - on input, the max number of bytes to read; on output, set to the actual number of bytes read
      * @param offset offset to read from
      * @return ResultCode SUCCESS if successful, FAILURE otherwise
      */
-    virtual ResultCode readFile(const char* mappingPath, char* buffer, size_t size, off_t offset);
+    virtual ResultCode readFile(const char* mappingPath, char* buffer, size_t& size, off_t offset);
 
     /**
      * @brief Writes the given buffer to a file at the given path.

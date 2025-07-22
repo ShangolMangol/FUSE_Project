@@ -220,6 +220,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
         if (handler->readFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {
             return -errno;
         }
+        
         return size;
     }
 
