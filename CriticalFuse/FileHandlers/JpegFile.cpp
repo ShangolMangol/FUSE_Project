@@ -63,6 +63,8 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     int mergedImageSize = mergedImage.tellg();
     mergedImage.seekg(0, std::ios::beg);
     mergedImage.read(buffer, mergedImageSize);
+    std::cout << "Reading from file: " << basePath + ".jpg" << " with size: " << mergedImageSize << std::endl;
+
     mergedImage.close();
 
     // remove the temporary file
