@@ -20,6 +20,8 @@
 #include <set>
 #include <string.h>
 #include <vector>
+#include <string>
+#include <memory>
 
 #include "guetzli/butteraugli_comparator.h"
 #include "guetzli/comparator.h"
@@ -31,10 +33,6 @@
 #include "guetzli/jpeg_data_writer.h"
 #include "guetzli/output_image.h"
 #include "guetzli/quantize.h"
-#include <string>
-#include <memory>
-
-int GuetzliStringOut(void* data, const uint8_t* buf, size_t count);
 
 namespace guetzli {
 
@@ -42,10 +40,18 @@ namespace {
 
 static const size_t kBlockSize = 3 * kDCTBlockSize;
 
+// This callback is used internally by the processor for scoring.
+int GuetzliStringOut(void* data, const uint8_t* buf, size_t count) {
+  std::string* sink = reinterpret_cast<std::string*>(data);
+  sink->append(reinterpret_cast<const char*>(buf), count);
+  return count; // Must return int
+}
+
 struct CoeffData {
   int idx;
   float block_err;
 };
+
 struct QuantData {
   int q[3][kDCTBlockSize];
   size_t jpg_size;
@@ -125,22 +131,14 @@ bool CheckJpegSanity(const JPEGData& jpg) {
 
 }  // namespace
 
-int GuetzliStringOut(void* data, const uint8_t* buf, size_t count) {
-  std::string* sink =
-      reinterpret_cast<std::string*>(data);
-  sink->append(reinterpret_cast<const char*>(buf), count);
-  return count;
-}
-
 void Processor::OutputJpeg(const JPEGData& jpg,
                            std::string* out,
                            const SplitMergeOptions* split_opts) {
-  fprintf(stderr, "[DEBUG] OutputJpeg: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
   out->clear();
-  JPEGOutput output(GuetzliStringOut, out);
-  fprintf(stderr, "[DEBUG] About to call WriteJpeg: split_opts=%p, split_jpeg=%d, noncrit_path='%s'\n", (void*)split_opts, split_opts ? split_opts->split_jpeg : -1, split_opts ? split_opts->noncrit_path.c_str() : "(null)");
-  if (!WriteJpeg(jpg, params_.clear_metadata, output, split_opts)) {
-    assert(0);
+  if (!WriteJpeg(jpg, params_.clear_metadata,
+                 JPEGOutput(GuetzliStringOut, out), split_opts)) {
+    fprintf(stderr, "Internal error: WriteJpeg failed.\n");
+    abort();
   }
 }
 
@@ -161,11 +159,6 @@ bool CompareQuantData(const QuantData& a, const QuantData& b) {
   return a.jpg_size < b.jpg_size;
 }
 
-// Compares a[0..kBlockSize) and b[0..kBlockSize) vectors, and returns
-//   0 : if they are equal
-//  -1 : if a is everywhere <= than b and in at least one coordinate <
-//   1 : if a is everywhere >= than b and in at least one coordinate >
-//   2 : if a and b are uncomparable (some coordinate smaller and some greater)
 int CompareQuantMatrices(const int* a, const int* b) {
   int i = 0;
   while (i < kBlockSize && a[i] == b[i]) ++i;
@@ -290,16 +283,10 @@ class QuantMatrixGenerator {
   }
 
   const bool downsample_;
-  // Lower bound for quant matrix heuristic score used in binary search.
   double hscore_a_;
-  // Upper bound for quant matrix heuristic score used in binary search, or 0.0
-  // if no upper bound is found yet.
   double hscore_b_;
-  // Cached value of the sum of all ContrastSensitivity() values over all
-  // quant matrix elements.
   double total_csf_;
   std::vector<QuantData> quants_;
-
   ProcessStats* stats_;
 };
 
@@ -315,6 +302,7 @@ QuantData Processor::TryQuantMatrix(const JPEGData& jpg_in,
   {
     JPEGData jpg_out = jpg_in;
     img->SaveToJpegData(&jpg_out);
+    // Internal calls for scoring do not need to split/merge
     OutputJpeg(jpg_out, &encoded_jpg, nullptr);
   }
   GUETZLI_LOG(stats_, "Iter %2d: %s quantization matrix:\n",
@@ -337,9 +325,6 @@ bool Processor::SelectQuantMatrix(const JPEGData& jpg_in, const bool downsample,
                                   int best_q[3][kDCTBlockSize],
                                   OutputImage* img) {
   QuantMatrixGenerator qgen(downsample, stats_);
-  // Don't try to go up to exactly the target distance when selecting a
-  // quantization matrix, since we will need some slack to do the frequency
-  // masking later.
   const float target_mul_high = 0.97f;
   const float target_mul_low = 0.95f;
 
@@ -360,15 +345,13 @@ bool Processor::SelectQuantMatrix(const JPEGData& jpg_in, const bool downsample,
     }
   }
 
-  memcpy(&best_q[0][0], &best.q[0][0], kBlockSize * sizeof(best_q[0][0]));
+  memcpy(&best_q[0][0], &best.q[0][0], 3 * kDCTBlockSize * sizeof(best_q[0][0]));
   GUETZLI_LOG(stats_, "\n%s selected quantization matrix:\n",
               downsample ? "YUV420" : "YUV444");
   GUETZLI_LOG_QUANT(stats_, best_q);
   return best.dist_ok;
 }
 
-
-// REQUIRES: block[c*64...(c*64+63)] is all zero if (comp_mask & (1<<c)) == 0.
 void Processor::ComputeBlockZeroingOrder(
     const coeff_t block[kBlockSize], const coeff_t orig_block[kBlockSize],
     const int block_x, const int block_y, const int factor_x,
@@ -452,20 +435,17 @@ void Processor::ComputeBlockZeroingOrder(
       }
     }
   }
-  // Make the block error values monotonic.
   float min_err = 1e10;
   for (int i = output_order->size() - 1; i >= 0; --i) {
     min_err = std::min(min_err, (*output_order)[i].block_err);
     (*output_order)[i].block_err = min_err;
   }
-  // Cut off at the block error limit.
   size_t num = 0;
   while (num < output_order->size() &&
          (*output_order)[num].block_err <= comparator_->BlockErrorLimit()) {
     ++num;
   }
   output_order->resize(num);
-  // Restore *img to the same state as it was at the start of this function.
   for (int c = 0; c < 3; ++c) {
     if (comp_mask & (1 << c)) {
       img->component(c).SetCoeffBlock(
@@ -620,10 +600,6 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
     for (;;) {
       if (stop_early && direction == -1) {
         if (prev_size > 1.01 * final_output_->jpeg_data.size()) {
-          // If we are down-adjusting the error, the output size will only keep
-          // increasing.
-          // TODO(user): Do this check always by comparing only the size
-          // of the currently processed components.
           break;
         }
       }
@@ -670,8 +646,6 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
           }
         }
         if (!global_order.empty()) {
-          // If we found something to adjust with the current block adjustment
-          // radius, we can stop and adjust the blocks we have.
           break;
         }
       }
@@ -769,6 +743,7 @@ void Processor::SelectFrequencyMasking(const JPEGData& jpg, OutputImage* img,
       {
         JPEGData jpg_out = jpg;
         img->SaveToJpegData(&jpg_out);
+        // Internal scoring calls do not need to split/merge
         OutputJpeg(jpg_out, &encoded_jpg, nullptr);
       }
       GUETZLI_LOG(stats_,
@@ -832,17 +807,16 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
     return false;
   }
   int q_in[3][kDCTBlockSize];
-  // Output the original image, in case we do not manage to create anything
-  // with a good enough quality.
+  
   std::string encoded_jpg;
   OutputJpeg(jpg_in, &encoded_jpg, split_opts);
+
   final_output_->score = -1;
   GUETZLI_LOG(stats, "Original Out[%7zd]", encoded_jpg.size());
-  if (comparator_ == nullptr) {
+  if (comparator == nullptr) {
     GUETZLI_LOG(stats, " <image too small for Butteraugli>\n");
     final_output_->jpeg_data = encoded_jpg;
     final_output_->score = encoded_jpg.size();
-    // Butteraugli doesn't work with images this small.
     return true;
   }
   {
@@ -884,6 +858,11 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
       SelectFrequencyMasking(jpg, &img, 1, ymul, false);
       SelectFrequencyMasking(jpg, &img, 6, 1.0, true);
     }
+    JPEGData jpg_out = jpg;
+    img.SaveToJpegData(&jpg_out);
+    std::string final_encoded_jpg;
+    OutputJpeg(jpg_out, &final_encoded_jpg, split_opts);
+    MaybeOutput(final_encoded_jpg);
   }
 
   return true;
@@ -891,14 +870,15 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
 
 }  // namespace guetzli
 
-// Add missing free function definitions for Process
+// These free functions must pass the options down.
 namespace guetzli {
 
+// CRASH FIX: This function now normalizes the input JPEG by decoding to RGB
+// first, which prevents crashes with progressive or other complex JPEGs.
 bool Process(const Params& params, ProcessStats* stats,
              const std::string& in_data,
              std::string* out_data,
              const SplitMergeOptions* split_opts) {
-  Processor processor;
   JPEGData jpg;
   if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
@@ -906,19 +886,14 @@ bool Process(const Params& params, ProcessStats* stats,
   }
   std::vector<uint8_t> rgb = DecodeJpegToRGB(jpg);
   if (rgb.empty()) {
-    fprintf(stderr, "Unsupported input JPEG file (e.g. unsupported downsampling mode).\nPlease provide the input image as a PNG file.\n");
+    fprintf(stderr, "Unsupported input JPEG file (e.g. progressive, etc.).\n"
+                    "Please provide the input image as a PNG file or a baseline JPEG.\n");
     return false;
   }
-  GuetzliOutput out;
-  ProcessStats dummy_stats;
-  if (stats == nullptr) stats = &dummy_stats;
-  std::unique_ptr<ButteraugliComparator> comparator;
-  if (jpg.width >= 32 && jpg.height >= 32) {
-    comparator.reset(new ButteraugliComparator(jpg.width, jpg.height, &rgb, params.butteraugli_target, stats));
-  }
-  bool ok = processor.ProcessJpegData(params, jpg, comparator.get(), &out, stats, split_opts);
-  *out_data = out.jpeg_data;
-  return ok;
+  
+  // After decoding, we call the other Process function which handles encoding
+  // from raw pixels. This ensures the pipeline always starts from a clean state.
+  return Process(params, stats, rgb, jpg.width, jpg.height, out_data, split_opts);
 }
 
 bool Process(const Params& params, ProcessStats* stats,
@@ -935,8 +910,8 @@ bool Process(const Params& params, ProcessStats* stats,
   ProcessStats dummy_stats;
   if (stats == nullptr) stats = &dummy_stats;
   std::unique_ptr<ButteraugliComparator> comparator;
-  if (jpg.width >= 32 && jpg.height >= 32) {
-    comparator.reset(new ButteraugliComparator(jpg.width, jpg.height, &rgb, params.butteraugli_target, stats));
+  if (w >= 32 && h >= 32) {
+    comparator.reset(new ButteraugliComparator(w, h, &rgb, params.butteraugli_target, stats));
   }
   bool ok = processor.ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats, split_opts);
   *out = out_struct.jpeg_data;

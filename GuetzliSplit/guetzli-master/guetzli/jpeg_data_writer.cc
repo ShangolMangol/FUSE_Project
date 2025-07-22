@@ -17,8 +17,6 @@
 #include "guetzli/jpeg_data_writer.h"
 #include "guetzli/jpeg_data_reader.h"
 
-using namespace guetzli;
-
 #include <assert.h>
 #include <cstdlib>
 #include <string.h>
@@ -30,29 +28,90 @@ using namespace guetzli;
 #include "guetzli/fast_log.h"
 #include "guetzli/jpeg_bit_writer.h"
 
-typedef guetzli::SplitMergeOptions SplitMergeOptions;
-
 namespace guetzli {
 
-// namespace {
+// This callback is used when merging to write to a std::string.
+static int GuetzliStringOut(void* data, const uint8_t* buf, size_t len) {
+  std::string* out = reinterpret_cast<std::string*>(data);
+  out->append(reinterpret_cast<const char*>(buf), len);
+  return len; // Return number of bytes written
+}
 
+// -- Definitions for SimpleBitWriter --
+void SimpleBitWriter::WriteBits(uint32_t bits, int nbits) {
+    for (int i = nbits - 1; i >= 0; --i) {
+      cur_byte = (cur_byte << 1) | ((bits >> i) & 1);
+      bit_pos++;
+      if (bit_pos == 8) {
+        data.push_back(cur_byte);
+        cur_byte = 0;
+        bit_pos = 0;
+      }
+    }
+}
+void SimpleBitWriter::Flush() {
+    if (bit_pos > 0) {
+      cur_byte <<= (8 - bit_pos);
+      data.push_back(cur_byte);
+      cur_byte = 0;
+      bit_pos = 0;
+    }
+}
+void SimpleBitWriter::WriteToFile(FILE* f) {
+    Flush();
+    fwrite(data.data(), 1, data.size(), f);
+}
+
+// -- Definition for SimpleBitReader --
+uint32_t SimpleBitReader::ReadBits(int nbits) {
+    uint32_t val = 0;
+    for (int i = 0; i < nbits; ++i) {
+      if (byte_pos >= size) return 0; // error
+      val = (val << 1) | ((data[byte_pos] >> (7 - bit_pos)) & 1);
+      bit_pos++;
+      if (bit_pos == 8) {
+        bit_pos = 0;
+        byte_pos++;
+      }
+    }
+    return val;
+}
+
+// -- Definitions for JpegHistogram --
+JpegHistogram::JpegHistogram() { Clear(); }
+void JpegHistogram::Clear() {
+  memset(counts, 0, sizeof(counts));
+  counts[kSize - 1] = 1;
+}
+void JpegHistogram::Add(int symbol) {
+  counts[symbol] += 2;
+}
+void JpegHistogram::Add(int symbol, int weight) {
+  counts[symbol] += 2 * weight;
+}
+void JpegHistogram::AddHistogram(const JpegHistogram& other) {
+  for (int i = 0; i + 1 < kSize; ++i) {
+    counts[i] += other.counts[i];
+  }
+  counts[kSize - 1] = 1;
+}
+int JpegHistogram::NumSymbols() const {
+  int n = 0;
+  for (int i = 0; i + 1 < kSize; ++i) {
+    n += (counts[i] > 0 ? 1 : 0);
+  }
+  return n;
+}
+
+// -- Start of internal (anonymous namespace) helper functions --
+namespace {
 
 static const int kJpegPrecision = 8;
 
-// Writes len bytes from buf, using the out callback.
 inline bool JPEGWrite(JPEGOutput out, const uint8_t* buf, size_t len) {
-  static const size_t kBlockSize = 1u << 30;
-  size_t pos = 0;
-  while (len - pos > kBlockSize) {
-    if (!out.Write(buf + pos, kBlockSize)) {
-      return false;
-    }
-    pos += kBlockSize;
-  }
-  return out.Write(buf + pos, len - pos);
+  return out.Write(buf, len);
 }
 
-// Writes a string using the out callback.
 inline bool JPEGWrite(JPEGOutput out, const std::string& s) {
   const uint8_t* data = reinterpret_cast<const uint8_t*>(&s[0]);
   return JPEGWrite(out, data, s.size());
@@ -136,7 +195,6 @@ bool EncodeSOF(const JPEGData& jpg, JPEGOutput out) {
   return JPEGWrite(out, &data[0], pos);
 }
 
-// Builds a JPEG-style huffman code from the given bit depths.
 void BuildHuffmanCode(uint8_t* depth, int* counts, int* values) {
   for (int i = 0; i < JpegHistogram::kSize; ++i) {
     if (depth[i] > 0) {
@@ -188,32 +246,260 @@ void BuildHuffmanCodeTable(const int* counts, const int* values,
   }
 }
 
-// }  // namespace
+bool BuildAndEncodeHuffmanCodes(const JPEGData& jpg, JPEGOutput out,
+                                std::vector<HuffmanCodeTable>* dc_huff_tables,
+                                std::vector<HuffmanCodeTable>* ac_huff_tables) {
+  const int ncomps = jpg.components.size();
+  dc_huff_tables->resize(ncomps);
+  ac_huff_tables->resize(ncomps);
+  std::vector<JpegHistogram> histograms(ncomps);
+  BuildDCHistograms(jpg, &histograms[0]);
+  size_t num_dc_histo = ncomps;
+  int dc_histo_indexes[kMaxComponents];
+  std::vector<uint8_t> depths(ncomps * JpegHistogram::kSize);
+  ClusterHistograms(&histograms[0], &num_dc_histo, dc_histo_indexes,
+                    &depths[0]);
+  histograms.resize(num_dc_histo + ncomps);
+  depths.resize((num_dc_histo + ncomps) * JpegHistogram::kSize);
+  BuildACHistograms(jpg, &histograms[num_dc_histo]);
+  size_t num_ac_histo = ncomps;
+  int ac_histo_indexes[kMaxComponents];
+  ClusterHistograms(&histograms[num_dc_histo], &num_ac_histo, ac_histo_indexes,
+                    &depths[num_dc_histo * JpegHistogram::kSize]);
+  int num_histo = num_dc_histo + num_ac_histo;
+  histograms.resize(num_histo);
+  int total_count = 0;
+  for (size_t i = 0; i < histograms.size(); ++i) {
+    total_count += histograms[i].NumSymbols();
+  }
+  const size_t dht_marker_len =
+      2 + num_histo * (kJpegHuffmanMaxBitLength + 1) + total_count;
+  const size_t sos_marker_len = 6 + 2 * ncomps;
+  std::vector<uint8_t> data(dht_marker_len + sos_marker_len + 4);
+  size_t pos = 0;
+  data[pos++] = 0xff;
+  data[pos++] = 0xc4;
+  data[pos++] = static_cast<uint8_t>(dht_marker_len >> 8);
+  data[pos++] = dht_marker_len & 0xff;
+  for (int i = 0; i < num_histo; ++i) {
+    const bool is_dc = static_cast<size_t>(i) < num_dc_histo;
+    const int idx = is_dc ? i : i - num_dc_histo;
+    int counts[kJpegHuffmanMaxBitLength + 1] = { 0 };
+    int values[JpegHistogram::kSize] = { 0 };
+    BuildHuffmanCode(&depths[i * JpegHistogram::kSize], counts, values);
+    HuffmanCodeTable table;
+    for (int j = 0; j < 256; ++j) table.depth[j] = 255;
+    BuildHuffmanCodeTable(counts, values, &table);
+    for (int c = 0; c < ncomps; ++c) {
+      if (is_dc) {
+        if (dc_histo_indexes[c] == idx) (*dc_huff_tables)[c] = table;
+      } else {
+        if (ac_histo_indexes[c] == idx) (*ac_huff_tables)[c] = table;
+      }
+    }
+    int max_length = kJpegHuffmanMaxBitLength;
+    while (max_length > 0 && counts[max_length] == 0) --max_length;
+    --counts[max_length];
+    int total_count_for_histo = 0;
+    for (int j = 0; j <= max_length; ++j) total_count_for_histo += counts[j];
+    data[pos++] = is_dc ? i : static_cast<uint8_t>(i - num_dc_histo + 0x10);
+    for (size_t j = 1; j <= kJpegHuffmanMaxBitLength; ++j) {
+      data[pos++] = counts[j];
+    }
+    for (int j = 0; j < total_count_for_histo; ++j) {
+      data[pos++] = values[j];
+    }
+  }
+  data[pos++] = 0xff;
+  data[pos++] = 0xda;
+  data[pos++] = static_cast<uint8_t>(sos_marker_len >> 8);
+  data[pos++] = sos_marker_len & 0xff;
+  data[pos++] = ncomps;
+  for (int i = 0; i < ncomps; ++i) {
+    data[pos++] = jpg.components[i].id;
+    data[pos++] = (dc_histo_indexes[i] << 4) | ac_histo_indexes[i];
+  }
+  data[pos++] = 0;
+  data[pos++] = 63;
+  data[pos++] = 0;
+  assert(pos == data.size());
+  return JPEGWrite(out, &data[0], data.size());
+}
 
-// Updates ac_histogram with the counts of the AC symbols that will be added by
-// a sequential jpeg encoder for this block. Every symbol is counted twice so
-// that we can add a fake symbol at the end with count 1 to be the last (least
-// frequent) symbol with the all 1 code.
-void UpdateACHistogramForDCTBlock(const coeff_t* coeffs,
-                                  JpegHistogram* ac_histogram) {
+void EncodeDCTBlockSequential(const coeff_t* coeffs,
+                              const HuffmanCodeTable& dc_huff,
+                              const HuffmanCodeTable& ac_huff,
+                              coeff_t* last_dc_coeff,
+                              BitWriter* bw,
+                              const SplitMergeOptions* split_merge_opts,
+                              void* noncrit_bits) {
+  coeff_t temp = coeffs[0] - *last_dc_coeff;
+  *last_dc_coeff = coeffs[0];
+  coeff_t temp2 = temp;
+  if (temp < 0) {
+    temp = -temp;
+    temp2--;
+  }
+  int nbits = (temp == 0) ? 0 : Log2Floor(temp) + 1;
+  bw->WriteBits(dc_huff.depth[nbits], dc_huff.code[nbits]);
+  if (nbits > 0) {
+    bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
+  }
   int r = 0;
+  if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
+    SimpleBitWriter* writer = reinterpret_cast<SimpleBitWriter*>(noncrit_bits);
+    WriteACBitsToNoncrit(coeffs, writer);
+    for (int k = 1; k < 64; ++k) {
+      coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
+      if (coeff == 0) {
+        r++;
+        continue;
+      }
+      while (r > 15) {
+        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]); // ZRL
+        r -= 16;
+      }
+      int ac_nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
+      int symbol = (r << 4) + ac_nbits;
+      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+      bw->WriteBits(ac_nbits, 0); // Write ZEROES for value bits.
+      r = 0;
+    }
+  } else {
+    for (int k = 1; k < 64; ++k) {
+      coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
+      if (coeff == 0) {
+        r++;
+        continue;
+      }
+      while (r > 15) {
+        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]); // ZRL
+        r -= 16;
+      }
+      temp2 = coeff;
+      if (temp2 < 0) {
+        temp2 = -temp2;
+        temp2 = ~temp2;
+      }
+      int ac_nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
+      int symbol = (r << 4) + ac_nbits;
+      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+      bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
+      r = 0;
+    }
+  }
+  if (r > 0) { // EOB
+    bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
+  }
+}
+
+bool EncodeScan(const JPEGData& jpg,
+                const std::vector<HuffmanCodeTable>& dc_huff_table,
+                const std::vector<HuffmanCodeTable>& ac_huff_table,
+                JPEGOutput out,
+                const SplitMergeOptions* split_merge_opts) {
+  coeff_t last_dc_coeff[kMaxComponents] = {0};
+  BitWriter bw(1 << 17);
+  SimpleBitWriter noncrit_writer;
+  void* noncrit_bits_ptr = nullptr;
+  if (split_merge_opts && split_merge_opts->split_jpeg) {
+    noncrit_bits_ptr = &noncrit_writer;
+  }
+  for (int mcu_y = 0; mcu_y < jpg.MCU_rows; ++mcu_y) {
+    for (int mcu_x = 0; mcu_x < jpg.MCU_cols; ++mcu_x) {
+      for (size_t i = 0; i < jpg.components.size(); ++i) {
+        const JPEGComponent& c = jpg.components[i];
+        for (int iy = 0; iy < c.v_samp_factor; ++iy) {
+          for (int ix = 0; ix < c.h_samp_factor; ++ix) {
+            int block_y = mcu_y * c.v_samp_factor + iy;
+            int block_x = mcu_x * c.h_samp_factor + ix;
+            int block_idx = block_y * c.width_in_blocks + block_x;
+            const coeff_t* coeffs = &c.coeffs[block_idx << 6];
+            EncodeDCTBlockSequential(coeffs, dc_huff_table[i], ac_huff_table[i],
+                                     &last_dc_coeff[i], &bw,
+                                     split_merge_opts, noncrit_bits_ptr);
+          }
+        }
+      }
+    }
+    if (bw.pos > (1 << 16)) {
+      if (!JPEGWrite(out, bw.data.get(), bw.pos)) return false;
+      bw.pos = 0;
+    }
+  }
+  bw.JumpToByteBoundary();
+  if (!JPEGWrite(out, bw.data.get(), bw.pos)) return false;
+  if (split_merge_opts && split_merge_opts->split_jpeg) {
+    FILE* f = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
+    if (!f) {
+      fprintf(stderr, "Failed to open noncrit file for writing: %s\n",
+              split_merge_opts->noncrit_path.c_str());
+      return false;
+    }
+    noncrit_writer.WriteToFile(f);
+    fclose(f);
+  }
+  return !bw.overflow;
+}
+
+std::vector<uint8_t> ReadFileToVec(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return {};
+    fseek(f, 0, SEEK_END);
+    size_t sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> data(sz);
+    size_t bytes_read = fread(data.data(), 1, sz, f);
+    if (bytes_read != sz) {
+        data.resize(bytes_read);
+    }
+    fclose(f);
+    return data;
+}
+
+}  // namespace (anonymous)
+
+// -- Start of functions with external linkage --
+
+void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer) {
   for (int k = 1; k < 64; ++k) {
-    coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
-    if (coeff == 0) {
-      r++;
+    coeff_t val = coeffs[kJPEGNaturalOrder[k]];
+    if (val == 0) {
+      writer->WriteBits(0, 4); // nbits = 0
       continue;
     }
-    while (r > 15) {
-      ac_histogram->Add(0xf0);
-      r -= 16;
+    
+    coeff_t temp = val;
+    coeff_t temp2;
+
+    if (temp < 0) {
+      temp = -temp;
+      temp2 = ~temp;
+    } else {
+      temp2 = temp;
     }
-    int nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
-    int symbol = (r << 4) + nbits;
-    ac_histogram->Add(symbol);
-    r = 0;
+    
+    int nbits = Log2FloorNonZero(temp) + 1;
+    writer->WriteBits(nbits, 4);
+    
+    if (nbits > 0) {
+        writer->WriteBits(temp2 & ((1 << nbits) - 1), nbits);
+    }
   }
-  if (r > 0) {
-    ac_histogram->Add(0);
+}
+
+void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader) {
+  for (int k = 1; k < 64; ++k) {
+    int nbits = reader->ReadBits(4);
+    if (nbits == 0) {
+      coeffs[kJPEGNaturalOrder[k]] = 0;
+    } else {
+      int val = reader->ReadBits(nbits);
+      if (val < (1 << (nbits - 1))) {
+        val -= (1 << nbits) - 1;
+      }
+      coeffs[kJPEGNaturalOrder[k]] = val;
+    }
   }
 }
 
@@ -231,11 +517,8 @@ size_t HistogramEntropyCost(const JpegHistogram& histo,
                             const uint8_t depths[256]) {
   size_t bits = 0;
   for (int i = 0; i + 1 < JpegHistogram::kSize; ++i) {
-    // JpegHistogram::Add() counts every symbol twice, so we have to divide by
-    // two here.
     bits += (histo.counts[i] / 2) * (depths[i] + (i & 0xf));
   }
-  // Estimate escape byte rate to be 0.75/256.
   bits += (bits * 3 + 512) >> 10;
   return bits;
 }
@@ -264,6 +547,29 @@ void BuildDCHistograms(const JPEGData& jpg, JpegHistogram* histo) {
   }
 }
 
+void UpdateACHistogramForDCTBlock(const coeff_t* coeffs,
+                                  JpegHistogram* ac_histogram) {
+  int r = 0;
+  for (int k = 1; k < 64; ++k) {
+    coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
+    if (coeff == 0) {
+      r++;
+      continue;
+    }
+    while (r > 15) {
+      ac_histogram->Add(0xf0);
+      r -= 16;
+    }
+    int nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
+    int symbol = (r << 4) + nbits;
+    ac_histogram->Add(symbol);
+    r = 0;
+  }
+  if (r > 0) {
+    ac_histogram->Add(0);
+  }
+}
+
 void BuildACHistograms(const JPEGData& jpg, JpegHistogram* histo) {
   for (size_t i = 0; i < jpg.components.size(); ++i) {
     const JPEGComponent& c = jpg.components[i];
@@ -274,7 +580,6 @@ void BuildACHistograms(const JPEGData& jpg, JpegHistogram* histo) {
   }
 }
 
-// Size of everything except the Huffman codes and the entropy coded data.
 size_t JpegHeaderSize(const JPEGData& jpg, bool strip_metadata) {
   size_t num_bytes = 0;
   num_bytes += 2;  // SOI
@@ -288,13 +593,12 @@ size_t JpegHeaderSize(const JPEGData& jpg, bool strip_metadata) {
       num_bytes += 2 + jpg.com_data[i].size();
     }
   }
-  // DQT
-  num_bytes += 4;
+  num_bytes += 4; // DQT
   for (size_t i = 0; i < jpg.quant.size(); ++i) {
     num_bytes += 1 + (jpg.quant[i].precision ? 2 : 1) * kDCTBlockSize;
   }
   num_bytes += 10 + 3 * jpg.components.size();  // SOF
-  num_bytes += 4;  // DHT (w/o actual Huffman code data)
+  num_bytes += 4;  // DHT
   num_bytes += 8 + 2 * jpg.components.size();  // SOS
   num_bytes += 2;  // EOI
   num_bytes += jpg.tail_data.size();
@@ -350,430 +654,69 @@ size_t ClusterHistograms(JpegHistogram* histo, size_t* num,
   return (total_cost + 7) / 8;
 }
 
-size_t EstimateJpegDataSize(const int num_components,
-                            const std::vector<JpegHistogram>& histograms) {
-  assert(histograms.size() == 2 * num_components);
-  std::vector<JpegHistogram> clustered = histograms;
-  size_t num_dc = num_components;
-  size_t num_ac = num_components;
-  int indexes[kMaxComponents];
-  uint8_t depth[kMaxComponents * JpegHistogram::kSize];
-  return (ClusterHistograms(&clustered[0], &num_dc, indexes, depth) +
-          ClusterHistograms(&clustered[num_components], &num_ac, indexes,
-                            depth));
-}
-
-// namespace {
-
-// Writes DHT and SOS marker segments to out and fills in DC/AC Huffman tables
-// for each component of the image.
-bool BuildAndEncodeHuffmanCodes(const JPEGData& jpg, JPEGOutput out,
-                                std::vector<HuffmanCodeTable>* dc_huff_tables,
-                                std::vector<HuffmanCodeTable>* ac_huff_tables) {
-  const int ncomps = jpg.components.size();
-  dc_huff_tables->resize(ncomps);
-  ac_huff_tables->resize(ncomps);
-
-  // Build separate DC histograms for each component.
-  std::vector<JpegHistogram> histograms(ncomps);
-  BuildDCHistograms(jpg, &histograms[0]);
-
-  // Cluster DC histograms.
-  size_t num_dc_histo = ncomps;
-  int dc_histo_indexes[kMaxComponents];
-  std::vector<uint8_t> depths(ncomps * JpegHistogram::kSize);
-  ClusterHistograms(&histograms[0], &num_dc_histo, dc_histo_indexes,
-                    &depths[0]);
-
-  // Build separate AC histograms for each component.
-  histograms.resize(num_dc_histo + ncomps);
-  depths.resize((num_dc_histo + ncomps) * JpegHistogram::kSize);
-  BuildACHistograms(jpg, &histograms[num_dc_histo]);
-
-  // Cluster AC histograms.
-  size_t num_ac_histo = ncomps;
-  int ac_histo_indexes[kMaxComponents];
-  ClusterHistograms(&histograms[num_dc_histo], &num_ac_histo, ac_histo_indexes,
-                    &depths[num_dc_histo * JpegHistogram::kSize]);
-
-  // Compute DHT and SOS marker data sizes and start emitting DHT marker.
-  int num_histo = num_dc_histo + num_ac_histo;
-  histograms.resize(num_histo);
-  int total_count = 0;
-  for (size_t i = 0; i < histograms.size(); ++i) {
-    total_count += histograms[i].NumSymbols();
-  }
-  const size_t dht_marker_len =
-      2 + num_histo * (kJpegHuffmanMaxBitLength + 1) + total_count;
-  const size_t sos_marker_len = 6 + 2 * ncomps;
-  std::vector<uint8_t> data(dht_marker_len + sos_marker_len + 4);
-  size_t pos = 0;
-  data[pos++] = 0xff;
-  data[pos++] = 0xc4;
-  data[pos++] = static_cast<uint8_t>(dht_marker_len >> 8);
-  data[pos++] = dht_marker_len & 0xff;
-
-  // Compute Huffman codes for each histograms.
-  for (int i = 0; i < num_histo; ++i) {
-    const bool is_dc = static_cast<size_t>(i) < num_dc_histo;
-    const int idx = is_dc ? i : i - num_dc_histo;
-    int counts[kJpegHuffmanMaxBitLength + 1] = { 0 };
-    int values[JpegHistogram::kSize] = { 0 };
-    BuildHuffmanCode(&depths[i * JpegHistogram::kSize], counts, values);
-    HuffmanCodeTable table;
-    for (int j = 0; j < 256; ++j) table.depth[j] = 255;
-    BuildHuffmanCodeTable(counts, values, &table);
-    for (int c = 0; c < ncomps; ++c) {
-      if (is_dc) {
-        if (dc_histo_indexes[c] == idx) (*dc_huff_tables)[c] = table;
-      } else {
-        if (ac_histo_indexes[c] == idx) (*ac_huff_tables)[c] = table;
-      }
-    }
-    int max_length = kJpegHuffmanMaxBitLength;
-    while (max_length > 0 && counts[max_length] == 0) --max_length;
-    --counts[max_length];
-    int total_count = 0;
-    for (int j = 0; j <= max_length; ++j) total_count += counts[j];
-    data[pos++] = is_dc ? i : static_cast<uint8_t>(i - num_dc_histo + 0x10);
-    for (size_t j = 1; j <= kJpegHuffmanMaxBitLength; ++j) {
-      data[pos++] = counts[j];
-    }
-    for (int j = 0; j < total_count; ++j) {
-      data[pos++] = values[j];
-    }
-  }
-
-  // Emit SOS marker data.
-  data[pos++] = 0xff;
-  data[pos++] = 0xda;
-  data[pos++] = static_cast<uint8_t>(sos_marker_len >> 8);
-  data[pos++] = sos_marker_len & 0xff;
-  data[pos++] = ncomps;
-  for (int i = 0; i < ncomps; ++i) {
-    data[pos++] = jpg.components[i].id;
-    data[pos++] = (dc_histo_indexes[i] << 4) | ac_histo_indexes[i];
-  }
-  data[pos++] = 0;
-  data[pos++] = 63;
-  data[pos++] = 0;
-  assert(pos == data.size());
-  return JPEGWrite(out, &data[0], data.size());
-}
-
-// Update EncodeDCTBlockSequential to accept split/merge options and bit writer/reader
-void EncodeDCTBlockSequential(const coeff_t* coeffs,
-                              const HuffmanCodeTable& dc_huff,
-                              const HuffmanCodeTable& ac_huff,
-                              coeff_t* last_dc_coeff,
-                              BitWriter* bw,
-                              const SplitMergeOptions* split_merge_opts,
-                              void* noncrit_bits) {
-  coeff_t temp2;
-  coeff_t temp;
-  temp2 = coeffs[0];
-  temp = temp2 - *last_dc_coeff;
-  *last_dc_coeff = temp2;
-  temp2 = temp;
-  if (temp < 0) {
-    temp = -temp;
-    temp2--;
-  }
-  int nbits = Log2Floor(temp) + 1;
-  bw->WriteBits(dc_huff.depth[nbits], dc_huff.code[nbits]);
-  if (nbits > 0) {
-    bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
-  }
-  int r = 0;
-  if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
-    // SPLIT MODE: Write zeros in crit, real AC bits in noncrit
-    SimpleBitWriter* writer = reinterpret_cast<SimpleBitWriter*>(noncrit_bits);
-    WriteACBitsToNoncrit(coeffs, writer);
-    for (int k = 1; k < 64; ++k) {
-      temp = coeffs[kJPEGNaturalOrder[k]];
-      if (temp == 0) {
-        r++;
-        continue;
-      }
-      while (r > 15) {
-        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-        r -= 16;
-      }
-      int nbits = Log2FloorNonZero(abs(temp)) + 1;
-      int symbol = (r << 4) + nbits;
-      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      bw->WriteBits(nbits, 0); // Always write zero for value bits in crit
-      r = 0;
-    }
-    if (r > 0) {
-      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-    }
-    return;
-  }
-  if (split_merge_opts && split_merge_opts->merge_jpeg && noncrit_bits) {
-    // MERGE MODE: Read value bits from noncrit and write to crit
-    SimpleBitReader* reader = reinterpret_cast<SimpleBitReader*>(noncrit_bits);
-    coeff_t block[64];
-    block[0] = *last_dc_coeff; // DC is already set
-    ReadACBitsFromNoncrit(block, reader);
-    for (int k = 1; k < 64; ++k) {
-      temp = block[kJPEGNaturalOrder[k]];
-      if (temp == 0) {
-        r++;
-        continue;
-      }
-      while (r > 15) {
-        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-        r -= 16;
-      }
-      int nbits = Log2FloorNonZero(abs(temp)) + 1;
-      int symbol = (r << 4) + nbits;
-      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      uint32_t ac_bits = (temp < 0) ? (~(abs(temp)) & ((1 << nbits) - 1)) : (temp & ((1 << nbits) - 1));
-      bw->WriteBits(nbits, ac_bits);
-      r = 0;
-    }
-    if (r > 0) {
-      bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-    }
-    return;
-  }
-  // NORMAL MODE: Write as usual
-  for (int k = 1; k < 64; ++k) {
-    temp = coeffs[kJPEGNaturalOrder[k]];
-    if (temp == 0) {
-      r++;
-      continue;
-    }
-    if (temp < 0) {
-      temp = -temp;
-      temp2 = ~temp;
-    } else {
-      temp2 = temp;
-    }
-    while (r > 15) {
-      bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]);
-      r -= 16;
-    }
-    int nbits = Log2FloorNonZero(temp) + 1;
-    int symbol = (r << 4) + nbits;
-    bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-    bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
-    r = 0;
-  }
-  if (r > 0) {
-    bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
-  }
-}
-
-// Update EncodeScan to accept split/merge options and file handles
-bool EncodeScan(const JPEGData& jpg,
-                const std::vector<HuffmanCodeTable>& dc_huff_table,
-                const std::vector<HuffmanCodeTable>& ac_huff_table,
-                JPEGOutput out,
-                const SplitMergeOptions* split_merge_opts) {
-  coeff_t last_dc_coeff[kMaxComponents] = { 0 };
-  BitWriter bw(1 << 17);
-  void* noncrit_bits = nullptr;
-  SimpleBitWriter writer;
-  std::vector<uint8_t> noncrit_buf;
-  SimpleBitReader* reader = nullptr;
-  if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
-    noncrit_bits = &writer;
-  } else if (split_merge_opts && split_merge_opts->merge_jpeg && !split_merge_opts->merge_noncrit_path.empty()) {
-    // Read .noncrit file into buffer
-    FILE* f = fopen(split_merge_opts->merge_noncrit_path.c_str(), "rb");
-    if (!f) {
-      fprintf(stderr, "Failed to open noncrit file for reading\n");
-      return false;
-    }
-    fseek(f, 0, SEEK_END);
-    size_t sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    noncrit_buf.resize(sz);
-    size_t _ = fread(noncrit_buf.data(), 1, sz, f);
-    fclose(f);
-    reader = new SimpleBitReader(noncrit_buf.data(), sz);
-    noncrit_bits = reader;
-  }
-  for (int mcu_y = 0; mcu_y < jpg.MCU_rows; ++mcu_y) {
-    for (int mcu_x = 0; mcu_x < jpg.MCU_cols; ++mcu_x) {
-      // Encode one MCU
-      for (size_t i = 0; i < jpg.components.size(); ++i) {
-        const JPEGComponent& c = jpg.components[i];
-        int nblocks_y = c.v_samp_factor;
-        int nblocks_x = c.h_samp_factor;
-        for (int iy = 0; iy < nblocks_y; ++iy) {
-          for (int ix = 0; ix < nblocks_x; ++ix) {
-            int block_y = mcu_y * nblocks_y + iy;
-            int block_x = mcu_x * nblocks_x + ix;
-            int block_idx = block_y * c.width_in_blocks + block_x;
-            const coeff_t* coeffs = &c.coeffs[block_idx << 6];
-            EncodeDCTBlockSequential(coeffs, dc_huff_table[i], ac_huff_table[i],
-                                     &last_dc_coeff[i], &bw,
-                                     split_merge_opts, noncrit_bits);
-          }
-        }
-      }
-      if (bw.pos > (1 << 16)) {
-        if (!JPEGWrite(out, bw.data.get(), bw.pos)) {
-          if (reader) delete reader;
-          return false;
-        }
-        bw.pos = 0;
-      }
-    }
-  }
-  bw.JumpToByteBoundary();
-  if (split_merge_opts && split_merge_opts->split_jpeg && !split_merge_opts->noncrit_path.empty()) {
-    // Write .noncrit file
-    FILE* f = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
-    if (!f) {
-      fprintf(stderr, "Failed to open noncrit file for writing\n");
-      return false;
-    }
-    writer.WriteToFile(f);
-    fclose(f);
-  }
-  if (reader) delete reader;
-  return !bw.overflow && JPEGWrite(out, bw.data.get(), bw.pos);
-}
-
-}  // namespace
-
-
-static std::vector<uint8_t> ReadFileToVec(const std::string& path) {
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) return {};
-    fseek(f, 0, SEEK_END);
-    size_t sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    std::vector<uint8_t> data(sz);
-    size_t _ = fread(data.data(), 1, sz, f);
-    fclose(f);
-    return data;
-}
-
-// Helper: Write nbits and value bits for each AC in split mode
-void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer) {
-    for (int k = 1; k < 64; ++k) {
-        int val = coeffs[kJPEGNaturalOrder[k]];
-        if (val == 0) {
-            writer->WriteBits(0, 4); // nbits = 0
-        } else {
-            int nbits = Log2FloorNonZero(abs(val)) + 1;
-            writer->WriteBits(nbits, 4); // Write nbits (4 bits)
-            uint32_t ac_bits = (val < 0) ? (~(abs(val)) & ((1 << nbits) - 1)) : (val & ((1 << nbits) - 1));
-            writer->WriteBits(ac_bits, nbits);
-        }
-    }
-}
-
-// Helper: Read nbits and value bits for each AC in merge mode
-void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader) {
-    for (int k = 1; k < 64; ++k) {
-        int nbits = reader->ReadBits(4);
-        if (nbits == 0) {
-            coeffs[kJPEGNaturalOrder[k]] = 0;
-        } else {
-            int val = reader->ReadBits(nbits);
-            // JPEG sign-magnitude to int
-            if (val < (1 << (nbits - 1)))
-                val -= (1 << nbits) - 1;
-            coeffs[kJPEGNaturalOrder[k]] = val;
-        }
-    }
-}
-
-// Real merge implementation
-bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path) {
-    // 1. Read .crit as JPEGData
-    std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
-    std::string crit_data(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
-    JPEGData jpg;
-    if (!ReadJpeg(crit_data, JPEG_READ_ALL, &jpg)) {
-        fprintf(stderr, "Failed to parse crit JPEG\n");
-        return false;
-    }
-    // 2. Read .noncrit as bitstream
-    std::vector<uint8_t> noncrit = ReadFileToVec(noncrit_path);
-    SimpleBitReader reader(noncrit.data(), noncrit.size());
-    // 3. For each block, for each AC, set AC from .noncrit
-    for (auto& comp : jpg.components) {
-        for (size_t block = 0; block < comp.coeffs.size(); block += 64) {
-            coeff_t* block_ptr = &comp.coeffs[block];
-            // DC stays as in .crit
-            guetzli::ReadACBitsFromNoncrit(block_ptr, &reader);
-        }
-    }
-    // 4. Write merged JPEG
-    std::string out_data;
-    JPEGOutput output(GuetzliStringOut, &out_data);
-    if (!WriteJpeg(jpg, false, output, nullptr)) {
-        fprintf(stderr, "Failed to write merged JPEG\n");
-        return false;
-    }
-    FILE* fout = fopen(out_path.c_str(), "wb");
-    if (!fout) return false;
-    fwrite(out_data.data(), 1, out_data.size(), fout);
-    fclose(fout);
-    fprintf(stderr, "[DEBUG] Merged .crit and .noncrit into %s\n", out_path.c_str());
-    return true;
-}
-
-// Move WriteJpeg and MergeCritNoncrit into the guetzli namespace
-namespace guetzli {
-
 bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
                const SplitMergeOptions* split_merge_opts) {
-    static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
-    static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
-    std::vector<HuffmanCodeTable> dc_codes;
-    std::vector<HuffmanCodeTable> ac_codes;
-    // Use split_merge_opts in the scan/entropy-coded data writing logic
-    return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
-            EncodeMetadata(jpg, strip_metadata, out) &&
-            EncodeDQT(jpg.quant, out) &&
-            EncodeSOF(jpg, out) &&
-            BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
-            EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
-            JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
-            (strip_metadata || JPEGWrite(out, jpg.tail_data)));
+  static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
+  static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
+  std::vector<HuffmanCodeTable> dc_codes;
+  std::vector<HuffmanCodeTable> ac_codes;
+  return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
+          EncodeMetadata(jpg, strip_metadata, out) &&
+          EncodeDQT(jpg.quant, out) &&
+          EncodeSOF(jpg, out) &&
+          BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
+          EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
+          JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
+          (strip_metadata || JPEGWrite(out, jpg.tail_data)));
 }
 
-bool MergeCritNoncrit(const std::string& crit_path, const std::string& noncrit_path, const std::string& out_path) {
-    // 1. Read .crit as JPEGData
-    std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
-    std::string crit_data(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
-    JPEGData jpg;
-    if (!ReadJpeg(crit_data, JPEG_READ_ALL, &jpg)) {
-        fprintf(stderr, "Failed to parse crit JPEG\n");
-        return false;
+bool MergeCritNoncrit(const std::string& crit_path,
+                      const std::string& noncrit_path,
+                      const std::string& out_path) {
+  // **CRASH FIX**: Store the vector in a named variable to prevent its
+  // immediate destruction and the resulting dangling pointer.
+  std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
+  if (crit_vec.empty()) {
+      fprintf(stderr, "Failed to read critical file: %s\n", crit_path.c_str());
+      return false;
+  }
+  std::string crit_data_str(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
+
+  JPEGData jpg;
+  if (!ReadJpeg(crit_data_str, JPEG_READ_ALL, &jpg)) {
+    fprintf(stderr, "Failed to parse critical JPEG data from %s\n", crit_path.c_str());
+    return false;
+  }
+
+  std::vector<uint8_t> noncrit_vec = ReadFileToVec(noncrit_path);
+  if (noncrit_vec.empty()) {
+      fprintf(stderr, "Failed to read non-critical file: %s\n", noncrit_path.c_str());
+      return false;
+  }
+  SimpleBitReader reader(noncrit_vec.data(), noncrit_vec.size());
+
+  for (auto& comp : jpg.components) {
+    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+      ReadACBitsFromNoncrit(&comp.coeffs[i], &reader);
     }
-    // 2. Read .noncrit as bitstream
-    std::vector<uint8_t> noncrit = ReadFileToVec(noncrit_path);
-    SimpleBitReader reader(noncrit.data(), noncrit.size());
-    // 3. For each block, for each AC, set AC from .noncrit
-    for (auto& comp : jpg.components) {
-        for (size_t block = 0; block < comp.coeffs.size(); block += 64) {
-            coeff_t* block_ptr = &comp.coeffs[block];
-            // DC stays as in .crit
-            ReadACBitsFromNoncrit(block_ptr, &reader);
-        }
-    }
-    // 4. Write merged JPEG
-    std::string out_data;
-    JPEGOutput output(GuetzliStringOut, &out_data);
-    if (!WriteJpeg(jpg, false, output, nullptr)) {
-        fprintf(stderr, "Failed to write merged JPEG\n");
-        return false;
-    }
-    FILE* fout = fopen(out_path.c_str(), "wb");
-    if (!fout) return false;
-    fwrite(out_data.data(), 1, out_data.size(), fout);
-    fclose(fout);
-    fprintf(stderr, "[DEBUG] Merged .crit and .noncrit into %s\n", out_path.c_str());
-    return true;
+  }
+
+  std::string out_data;
+  JPEGOutput output(GuetzliStringOut, &out_data);
+  if (!WriteJpeg(jpg, false, output, nullptr)) {
+    fprintf(stderr, "Failed to write merged JPEG data.\n");
+    return false;
+  }
+
+  FILE* fout = fopen(out_path.c_str(), "wb");
+  if (!fout) {
+    fprintf(stderr, "Failed to open output file for writing: %s\n", out_path.c_str());
+    return false;
+  }
+  fwrite(out_data.data(), 1, out_data.size(), fout);
+  fclose(fout);
+
+  return true;
 }
 
-} // namespace guetzli
+}  // namespace guetzli

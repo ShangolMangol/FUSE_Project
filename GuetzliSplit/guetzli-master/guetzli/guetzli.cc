@@ -1,3 +1,5 @@
+// --- START OF FILE guetzli.cc ---
+
 /*
  * Copyright 2016 Google Inc.
  *
@@ -33,12 +35,8 @@
 namespace {
 
 constexpr int kDefaultJPEGQuality = 95;
-
-// An upper estimate of memory usage of Guetzli. The bound is
-// max(kLowerMemusaeMB * 1<<20, pixel_count * kBytesPerPixel)
 constexpr int kBytesPerPixel = 350;
 constexpr int kLowestMemusageMB = 100; // in MB
-
 constexpr int kDefaultMemlimitMB = 6000; // in MB
 
 inline uint8_t BlendOnBlack(const uint8_t val, const uint8_t alpha) {
@@ -52,63 +50,44 @@ bool ReadPNG(const std::string& data, int* xsize, int* ysize,
   if (!png_ptr) {
     return false;
   }
-
   png_infop info_ptr = png_create_info_struct(png_ptr);
   if (!info_ptr) {
     png_destroy_read_struct(&png_ptr, nullptr, nullptr);
     return false;
   }
-
   if (setjmp(png_jmpbuf(png_ptr)) != 0) {
-    // Ok we are here because of the setjmp.
     png_destroy_read_struct(&png_ptr, &info_ptr, nullptr);
     return false;
   }
-
   std::istringstream memstream(data, std::ios::in | std::ios::binary);
   png_set_read_fn(png_ptr, static_cast<void*>(&memstream), [](png_structp png_ptr, png_bytep outBytes, png_size_t byteCountToRead) {
     std::istringstream& memstream = *static_cast<std::istringstream*>(png_get_io_ptr(png_ptr));
-    
     memstream.read(reinterpret_cast<char*>(outBytes), byteCountToRead);
-
     if (memstream.eof()) png_error(png_ptr, "unexpected end of data");
     if (memstream.fail()) png_error(png_ptr, "read from memory error");
   });
-
-  // The png_transforms flags are as follows:
-  // packing == convert 1,2,4 bit images,
-  // strip == 16 -> 8 bits / channel,
-  // shift == use sBIT dynamics, and
-  // expand == palettes -> rgb, grayscale -> 8 bit images, tRNS -> alpha.
   const unsigned int png_transforms =
       PNG_TRANSFORM_PACKING | PNG_TRANSFORM_EXPAND | PNG_TRANSFORM_STRIP_16;
-
   png_read_png(png_ptr, info_ptr, png_transforms, nullptr);
-
   png_bytep* row_pointers = png_get_rows(png_ptr, info_ptr);
-
   *xsize = png_get_image_width(png_ptr, info_ptr);
   *ysize = png_get_image_height(png_ptr, info_ptr);
   rgb->resize(3 * (*xsize) * (*ysize));
-
   const int components = png_get_channels(png_ptr, info_ptr);
   switch (components) {
     case 1: {
-      // GRAYSCALE
       for (int y = 0; y < *ysize; ++y) {
         const uint8_t* row_in = row_pointers[y];
         uint8_t* row_out = &(*rgb)[3 * y * (*xsize)];
         for (int x = 0; x < *xsize; ++x) {
-          const uint8_t gray = row_in[x];
-          row_out[3 * x + 0] = gray;
-          row_out[3 * x + 1] = gray;
-          row_out[3 * x + 2] = gray;
+          row_out[3 * x + 0] = row_in[x];
+          row_out[3 * x + 1] = row_in[x];
+          row_out[3 * x + 2] = row_in[x];
         }
       }
       break;
     }
     case 2: {
-      // GRAYSCALE + ALPHA
       for (int y = 0; y < *ysize; ++y) {
         const uint8_t* row_in = row_pointers[y];
         uint8_t* row_out = &(*rgb)[3 * y * (*xsize)];
@@ -122,16 +101,12 @@ bool ReadPNG(const std::string& data, int* xsize, int* ysize,
       break;
     }
     case 3: {
-      // RGB
       for (int y = 0; y < *ysize; ++y) {
-        const uint8_t* row_in = row_pointers[y];
-        uint8_t* row_out = &(*rgb)[3 * y * (*xsize)];
-        memcpy(row_out, row_in, 3 * (*xsize));
+        memcpy(&(*rgb)[3 * y * (*xsize)], row_pointers[y], 3 * (*xsize));
       }
       break;
     }
     case 4: {
-      // RGBA
       for (int y = 0; y < *ysize; ++y) {
         const uint8_t* row_in = row_pointers[y];
         uint8_t* row_out = &(*rgb)[3 * y * (*xsize)];
@@ -154,44 +129,33 @@ bool ReadPNG(const std::string& data, int* xsize, int* ysize,
 
 std::string ReadFileOrDie(const char* filename) {
   bool read_from_stdin = strncmp(filename, "-", 2) == 0;
-
   FILE* f = read_from_stdin ? stdin : fopen(filename, "rb");
   if (!f) {
-    perror("Can't open input file");
+    fprintf(stderr, "Can't open input file: %s\n", filename);
+    perror("Details");
     exit(1);
   }
-
   std::string result;
   off_t buffer_size = 8192;
-
   if (fseek(f, 0, SEEK_END) == 0) {
     buffer_size = std::max<off_t>(ftell(f), 1);
-    if (fseek(f, 0, SEEK_SET) != 0) {
-      perror("fseek");
-      exit(1);
-    }
-  } else if (ferror(f)) {
-    perror("fseek");
-    exit(1);
+    fseek(f, 0, SEEK_SET);
   }
-
   std::unique_ptr<char[]> buf(new char[buffer_size]);
   while (!feof(f)) {
-    size_t read_bytes = fread(buf.get(), sizeof(char), buffer_size, f);
+    size_t read_bytes = fread(buf.get(), 1, buffer_size, f);
     if (ferror(f)) {
       perror("fread");
       exit(1);
     }
     result.append(buf.get(), read_bytes);
   }
-
   fclose(f);
   return result;
 }
 
 void WriteFileOrDie(const char* filename, const std::string& contents) {
   bool write_to_stdout = strncmp(filename, "-", 2) == 0;
-
   FILE* f = write_to_stdout ? stdout : fopen(filename, "wb");
   if (!f) {
     perror("Can't open output file for writing");
@@ -219,14 +183,14 @@ void Usage() {
       "guetzli [flags] input_filename output_filename\n"
       "\n"
       "Flags:\n"
-      "  --verbose    - Print a verbose trace of all attempts to standard output.\n"
-      "  --quality Q  - Visual quality to aim for, expressed as a JPEG quality value.\n"
-      "                 Default value is %d.\n"
-      "  --memlimit M - Memory limit in MB. Guetzli will fail if unable to stay under\n"
-      "                 the limit. Default limit is %d MB.\n"
-      "  --nomemlimit - Do not limit memory usage.\n"
-      "  --split-jpeg - Write output as split .crit/.noncrit files.\n"
-      "  --merge-jpeg - Merge .crit/.noncrit files into a JPEG.\n",
+      "  --verbose      - Print a verbose trace of all attempts.\n"
+      "  --quality Q    - Visual quality to aim for (JPEG quality value). Default: %d\n"
+      "  --memlimit M   - Memory limit in MB. Default: %d\n"
+      "  --nomemlimit   - Do not limit memory usage.\n"
+      "  --split        - Output a .crit and .noncrit file instead of a JPEG.\n"
+      "                   The output_filename is used as a base name.\n"
+      "  --merge        - Input is a .crit file, merges with corresponding\n"
+      "                   .noncrit file to produce a JPEG.\n",
       kDefaultJPEGQuality, kDefaultMemlimitMB);
   exit(1);
 }
@@ -239,33 +203,28 @@ int main(int argc, char** argv) {
   int verbose = 0;
   int quality = kDefaultJPEGQuality;
   int memlimit_mb = kDefaultMemlimitMB;
-  int split_jpeg = 0;
-  int merge_jpeg = 0;
+  bool split_mode = false;
+  bool merge_mode = false;
 
   int opt_idx = 1;
-  for(;opt_idx < argc;opt_idx++) {
-    if (strnlen(argv[opt_idx], 2) < 2 || argv[opt_idx][0] != '-' || argv[opt_idx][1] != '-')
-      break;
+  for (; opt_idx < argc; ++opt_idx) {
+    if (strnlen(argv[opt_idx], 2) < 2 || argv[opt_idx][0] != '-') break;
     if (!strcmp(argv[opt_idx], "--verbose")) {
       verbose = 1;
     } else if (!strcmp(argv[opt_idx], "--quality")) {
-      opt_idx++;
-      if (opt_idx >= argc)
-        Usage();
+      if (++opt_idx >= argc) Usage();
       quality = atoi(argv[opt_idx]);
     } else if (!strcmp(argv[opt_idx], "--memlimit")) {
-      opt_idx++;
-      if (opt_idx >= argc)
-        Usage();
+      if (++opt_idx >= argc) Usage();
       memlimit_mb = atoi(argv[opt_idx]);
     } else if (!strcmp(argv[opt_idx], "--nomemlimit")) {
       memlimit_mb = -1;
-    } else if (!strcmp(argv[opt_idx], "--split-jpeg")) {
-      split_jpeg = 1;
-    } else if (!strcmp(argv[opt_idx], "--merge-jpeg")) {
-      merge_jpeg = 1;
+    } else if (!strcmp(argv[opt_idx], "--split")) {
+      split_mode = true;
+    } else if (!strcmp(argv[opt_idx], "--merge")) {
+      merge_mode = true;
     } else if (!strcmp(argv[opt_idx], "--")) {
-      opt_idx++;
+      ++opt_idx;
       break;
     } else {
       fprintf(stderr, "Unknown commandline flag: %s\n", argv[opt_idx]);
@@ -277,44 +236,63 @@ int main(int argc, char** argv) {
     Usage();
   }
 
-  guetzli::SplitMergeOptions split_opts;
-  split_opts.split_jpeg = split_jpeg;
-  split_opts.merge_jpeg = merge_jpeg;
-  std::string crit_path, noncrit_path;
-  if (split_jpeg) {
-    // Output: output.crit, output.noncrit
-    crit_path = argv[opt_idx + 1];
-    size_t dot = crit_path.find_last_of('.');
-    if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
-    noncrit_path = crit_path + ".noncrit";
-    crit_path = crit_path + ".crit";
-    split_opts.crit_path = crit_path;
-    split_opts.noncrit_path = noncrit_path;
+  if (split_mode && merge_mode) {
+    fprintf(stderr, "Cannot use --split and --merge at the same time.\n");
+    Usage();
   }
-  if (merge_jpeg) {
-    // Input: input.crit, input.noncrit; Output: merged.jpg
-    crit_path = argv[opt_idx];
-    size_t dot = crit_path.find_last_of('.');
-    if (dot != std::string::npos) crit_path = crit_path.substr(0, dot);
-    noncrit_path = crit_path + ".noncrit";
-    crit_path = crit_path + ".crit";
-    split_opts.merge_crit_path = crit_path;
-    split_opts.merge_noncrit_path = noncrit_path;
-    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path, split_opts.merge_noncrit_path, argv[opt_idx + 1])) {
-        fprintf(stderr, "Merge failed\n");
-        return 1;
+
+  const char* in_filename = argv[opt_idx];
+  const char* out_filename = argv[opt_idx + 1];
+
+  guetzli::SplitMergeOptions split_opts;
+  split_opts.split_jpeg = split_mode;
+  split_opts.merge_jpeg = merge_mode;
+
+  if (merge_mode) {
+    std::string base_path = in_filename;
+    size_t crit_pos = base_path.rfind(".crit");
+    if (crit_pos != std::string::npos) {
+      base_path = base_path.substr(0, crit_pos);
     }
+    split_opts.merge_crit_path = base_path + ".crit";
+    split_opts.merge_noncrit_path = base_path + ".noncrit";
+
+    fprintf(stderr, "Merging %s and %s into %s\n",
+            split_opts.merge_crit_path.c_str(),
+            split_opts.merge_noncrit_path.c_str(),
+            out_filename);
+
+    if (!guetzli::MergeCritNoncrit(split_opts.merge_crit_path,
+                                  split_opts.merge_noncrit_path,
+                                  out_filename)) {
+      fprintf(stderr, "Merge failed.\n");
+      return 1;
+    }
+    fprintf(stderr, "Merge successful.\n");
     return 0;
   }
 
-  std::string in_data = ReadFileOrDie(argv[opt_idx]);
+  if (split_mode) {
+    std::string base_path = out_filename;
+    size_t jpg_pos = base_path.rfind(".jpg");
+    if (jpg_pos != std::string::npos) {
+      base_path = base_path.substr(0, jpg_pos);
+    }
+    size_t jpeg_pos = base_path.rfind(".jpeg");
+    if (jpeg_pos != std::string::npos) {
+        base_path = base_path.substr(0, jpeg_pos);
+    }
+    split_opts.crit_path = base_path + ".crit";
+    split_opts.noncrit_path = base_path + ".noncrit";
+  }
+
+  std::string in_data = ReadFileOrDie(in_filename);
   std::string out_data;
 
   guetzli::Params params;
-  params.butteraugli_target = static_cast<float>(
-      guetzli::ButteraugliScoreForQuality(quality));
-  params.split_jpeg = split_jpeg;
-  params.merge_jpeg = merge_jpeg;
+  params.butteraugli_target =
+      static_cast<float>(guetzli::ButteraugliScoreForQuality(quality));
+  params.split_jpeg = split_mode;
 
   guetzli::ProcessStats stats;
   if (verbose) {
@@ -333,9 +311,8 @@ int main(int argc, char** argv) {
       return 1;
     }
     double pixels = static_cast<double>(xsize) * ysize;
-    if (memlimit_mb != -1
-        && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb
-            || memlimit_mb < kLowestMemusageMB)) {
+    if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
+                                memlimit_mb < kLowestMemusageMB)) {
       fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
       return 1;
     }
@@ -343,16 +320,15 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
-  } else if (!merge_jpeg) { // Only try to parse as JPEG if NOT merging
+  } else {
     guetzli::JPEGData jpg_header;
     if (!guetzli::ReadJpeg(in_data, guetzli::JPEG_READ_HEADER, &jpg_header)) {
-      fprintf(stderr, "Error reading JPG data from input file\n");
+      fprintf(stderr, "Input is not a PNG and not a valid JPEG\n");
       return 1;
     }
     double pixels = static_cast<double>(jpg_header.width) * jpg_header.height;
-    if (memlimit_mb != -1
-        && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb
-            || memlimit_mb < kLowestMemusageMB)) {
+    if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
+                                memlimit_mb < kLowestMemusageMB)) {
       fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
       return 1;
     }
@@ -360,18 +336,18 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
-  } else { // merge_jpeg mode: just call Process with empty in_data
-    if (!guetzli::Process(params, &stats, std::string(), &out_data, &split_opts)) {
-      fprintf(stderr, "Guetzli processing failed (merge mode)\n");
-      return 1;
-    }
   }
 
-  if (split_jpeg) {
+  if (split_mode) {
+    // The .noncrit file is written during Process. We just need to write the
+    // .crit file, which is returned in out_data.
+    fprintf(stderr, "Writing %s\n", split_opts.crit_path.c_str());
     WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
-    // .noncrit is already written by the encoder
+    fprintf(stderr, "Wrote %s\n", split_opts.noncrit_path.c_str());
   } else {
-    WriteFileOrDie(argv[opt_idx + 1], out_data);
+    WriteFileOrDie(out_filename, out_data);
   }
+
   return 0;
 }
+// --- END OF FILE guetzli.cc ---

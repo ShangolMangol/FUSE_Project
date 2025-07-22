@@ -1,3 +1,4 @@
+// --- START OF FILE processor.h ---
 /*
  * Copyright 2016 Google Inc.
  *
@@ -65,3 +66,4 @@ bool Process(const Params& params, ProcessStats* stats,
 }  // namespace guetzli
 
 #endif  // GUETZLI_PROCESSOR_H_
+// --- END OF FILE processor.h ---
