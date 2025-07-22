@@ -132,8 +132,8 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
             totalSize = std::max(totalSize, range.getEnd() + 1);
         }
         if (totalSize == 0) {
-            std::cout << "Total size is 0, setting to 1 to ensure reading" << std::endl;
-            totalSize = 1;
+            std::cout << "Total size is 0, setting to 4KB to ensure reading" << std::endl;
+            totalSize = 4096;
         }
         stbuf->st_size = totalSize;
 

@@ -59,9 +59,11 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     }
 
     // read the JPEG file into the buffer
-    std::ifstream file(basePath + ".jpg", std::ios::binary);
-    file.read(buffer, size);
-    file.close();
+    std::ifstream mergedImage(basePath + ".jpg", std::ios::binary);
+    int mergedImageSize = mergedImage.tellg();
+    mergedImage.seekg(0, std::ios::beg);
+    mergedImage.read(buffer, mergedImageSize);
+    mergedImage.close();
 
     // remove the temporary file
     // unlink(basePath + ".jpg");
