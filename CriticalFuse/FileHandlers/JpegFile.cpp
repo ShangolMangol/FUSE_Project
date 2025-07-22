@@ -34,7 +34,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         }
 
         // remove the temporary file
-        // unlink(basePath.c_str());
+        unlink(basePath.c_str());
     }
     return ResultCode::SUCCESS;
 }
@@ -69,7 +69,7 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     size = mergedImageSize;
 
     // remove the temporary file
-    // unlink(basePath + ".jpg");
+    unlink(basePath + ".jpg");
 
     return ResultCode::SUCCESS;
 }
