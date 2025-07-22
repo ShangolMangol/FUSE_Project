@@ -870,6 +870,19 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
 
 }  // namespace guetzli
 
+// Add this helper at file scope, in the guetzli namespace:
+namespace guetzli {
+void ZeroACValueBits(JPEGData* jpg) {
+  for (auto& comp : jpg->components) {
+    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+      for (int k = 1; k < kDCTBlockSize; ++k) {
+        comp.coeffs[i + k] = 0;
+      }
+    }
+  }
+}
+}
+
 // These free functions must pass the options down.
 namespace guetzli {
 
@@ -879,6 +892,39 @@ bool Process(const Params& params, ProcessStats* stats,
              const std::string& in_data,
              std::string* out_data,
              const SplitMergeOptions* split_opts) {
+  if (split_opts && split_opts->split_jpeg) {
+    // --- SPLIT MODE ---
+    guetzli::JPEGData jpg;
+    if (!guetzli::ReadJpeg(in_data, guetzli::JPEG_READ_ALL, &jpg)) {
+      fprintf(stderr, "Can't read jpg data from input file\n");
+      return false;
+    }
+    // Write .noncrit from original ACs
+    FILE* f = fopen(split_opts->noncrit_path.c_str(), "wb");
+    if (!f) {
+      fprintf(stderr, "Failed to open noncrit file for writing: %s\n", split_opts->noncrit_path.c_str());
+      return false;
+    }
+    guetzli::SimpleBitWriter writer;
+    for (auto& comp : jpg.components) {
+      for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+        guetzli::WriteACBitsToNoncrit(&comp.coeffs[i], &writer);
+      }
+    }
+    writer.WriteToFile(f);
+    fclose(f);
+    // Write .crit: zero AC value bits in a copy, but preserve structure
+    guetzli::JPEGData crit_jpg = jpg;
+    guetzli::ZeroACValueBits(&crit_jpg);
+    std::string crit_data;
+    guetzli::JPEGOutput crit_output(guetzli::GuetzliStringOut, &crit_data);
+    if (!guetzli::WriteJpeg(crit_jpg, false, crit_output, nullptr)) {
+      fprintf(stderr, "Failed to write .crit file\n");
+      return false;
+    }
+    *out_data = crit_data;
+    return true;
+  }
   JPEGData jpg;
   if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
