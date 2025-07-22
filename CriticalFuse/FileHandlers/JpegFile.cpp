@@ -59,7 +59,7 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     }
 
     // read the JPEG file into the buffer
-    std::ifstream mergedImage(basePath + ".jpg", std::ios::binary);
+    std::ifstream mergedImage(basePath + ".jpg", std::ios::binary | std::ios::ate);
     int mergedImageSize = mergedImage.tellg();
     mergedImage.seekg(0, std::ios::beg);
     mergedImage.read(buffer, mergedImageSize);
