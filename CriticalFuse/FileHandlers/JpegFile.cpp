@@ -45,6 +45,8 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     if (basePath.size() >= suffix.size() && basePath.compare(basePath.size() - suffix.size(), suffix.size(), suffix) == 0) {
         basePath = basePath.substr(0, basePath.size() - suffix.size());
     }
+    //remove the .jpg from the basePath
+    basePath = basePath.substr(0, basePath.size() - 4);
 
     // merge the .crit and .noncrit files back into a JPEG
     std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --merge " + basePath + ".crit " + basePath + ".jpg";
