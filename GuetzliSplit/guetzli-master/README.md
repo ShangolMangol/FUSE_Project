@@ -2,7 +2,77 @@
 
 # GuetzliSplit
 
-GuetzliSplit is a modified version of the Guetzli JPEG encoder that supports splitting JPEG files into critical and non-critical parts, and merging them back into a standard JPEG.
+GuetzliSplit is a fork of Guetzli with added support for splitting and merging JPEG files into critical and non-critical parts.
+
+## Building and Running
+
+### Build Instructions
+
+1. **Install dependencies:**
+   - You need a C++ compiler (e.g., g++, clang++) and `make`.
+   - On Ubuntu/Debian: `sudo apt-get install build-essential`
+   - On Windows: Use MSVC or MinGW, or build in WSL.
+
+2. **Build the project:**
+   ```sh
+   cd guetzli-master
+   make
+   ```
+   - The binaries will be created in `bin/Release/` (e.g., `bin/Release/guetzli`).
+
+### Running GuetzliSplit
+
+#### Split a JPEG
+
+```
+./bin/Release/guetzli --split input.jpg output.jpg
+```
+- Produces `output.crit` and `output.noncrit` in the same directory.
+- `output.crit` is a valid JPEG with all structure preserved, but visually blurry (no AC values).
+- `output.noncrit` contains the AC value bits only.
+
+#### Merge a Split JPEG
+
+```
+./bin/Release/guetzli --merge output.crit merged.jpg
+```
+- Requires both `output.crit` and `output.noncrit` in the same directory.
+- Produces `merged.jpg`, which is visually and structurally identical to the original `input.jpg`.
+
+#### Standard Compression (Original Guetzli)
+
+```
+./bin/Release/guetzli input.jpg output.jpg
+```
+- Compresses `input.jpg` to `output.jpg` using Guetzli's standard algorithm.
+
+### Notes
+- The split/merge process is **lossless** for baseline JPEGs: all quantization tables, component IDs, and SOF markers are preserved.
+- Only the AC value bits are separated; all other JPEG data remains in `.crit`.
+- Input JPEGs must be baseline (not progressive).
+- You can use tools like `djpeg -debug` to verify that `.crit` matches the original JPEG in all structure except for AC values.
+
+## Split/Merge JPEG Functionality
+
+GuetzliSplit can split a JPEG into two files:
+- `.crit`: Contains all JPEG structure, metadata, quantization tables, component IDs, DC coefficients, and AC *length* (nbits) values, but the AC *value* bits are zeroed.
+- `.noncrit`: Contains only the AC *value* bits for all blocks, in order.
+
+This allows you to store the critical JPEG structure separately from the high-frequency AC data.
+
+## Usage
+
+```
+./bin/Release/guetzli [--split] [--merge] [flags] input.jpg output.jpg
+```
+
+- Use `--split` to produce `.crit` and `.noncrit` files from a JPEG.
+- Use `--merge` to reconstruct a JPEG from `.crit` and `.noncrit` files.
+- Without `--split` or `--merge`, GuetzliSplit acts as a standard Guetzli compressor.
+
+## Original Guetzli README
+
+---
 
 ## Features
 - **Standard Guetzli compression**
@@ -20,36 +90,6 @@ GuetzliSplit is a modified version of the Guetzli JPEG encoder that supports spl
    make
    ```
    This will build the `guetzli` binary in `./bin/Release/guetzli`.
-
----
-
-## Usage
-
-### 1. **Standard Guetzli Compression**
-Compress a JPEG as usual:
-```sh
-./bin/Release/guetzli input.jpg output.jpg
-```
-
-### 2. **Split a JPEG into .crit and .noncrit**
-Split a JPEG into critical and non-critical files:
-```sh
-./bin/Release/guetzli --split-jpeg input.jpg output.crit
-```
-- This will create:
-  - `output.crit` (all JPEG data except AC bits)
-  - `output.noncrit` (raw AC coefficient bits)
-
-### 3. **Merge .crit and .noncrit Back into a JPEG**
-Reconstruct a JPEG from split files:
-```sh
-./bin/Release/guetzli --merge-jpeg output.crit merged.jpg
-```
-- This will read:
-  - `output.crit`
-  - `output.noncrit` (must be in the same directory)
-- It will produce:
-  - `merged.jpg` (the reconstructed JPEG)
 
 ---
 
