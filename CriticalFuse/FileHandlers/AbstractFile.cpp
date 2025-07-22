@@ -216,7 +216,7 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
         }
 
         // Reconstruct full logical file
-        int totalSize = 0;
+        size_t totalSize = 0;
         for (const auto& [range, _] : fileMap) {
             totalSize = std::max(totalSize, range.getEnd() + 1);
         }
