@@ -23,7 +23,8 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         file.close();
 
         // split the file into .crit and .noncrit using GuetzliSplit
-        std::string command = "GuetzliSplit --split " + basePath + " " + basePath + ".crit ";
+        std::string command = "/home/shangol-mangol/Desktop/Fuse Project/FUSE_Project/CriticalFuse/GuetzliSplit --split " + basePath + " " + basePath + ".crit ";
+        std::cout << "Executing command: " << command << std::endl;
         int ret = system(command.c_str());
         if (ret != 0) {
             return ResultCode::FAILURE;
@@ -43,7 +44,8 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     }
 
     // merge the .crit and .noncrit files back into a JPEG
-    std::string command = "GuetzliSplit --merge " + basePath + ".crit " + basePath + ".jpg";
+    std::string command = "/home/shangol-mangol/Desktop/Fuse Project/FUSE_Project/CriticalFuse/GuetzliSplit --merge " + basePath + ".crit " + basePath + ".jpg";
+    std::cout << "Executing command: " << command << std::endl;
     int ret = system(command.c_str());
     if (ret != 0) {
         return ResultCode::FAILURE;
