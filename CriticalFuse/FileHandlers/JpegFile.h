@@ -16,12 +16,7 @@ public:
     ResultCode writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) override;
     ResultCode createMapping(const char* buffer, size_t size) override;
 
-private:
-    void splitACCoefficientsExact(const char* jpegData, size_t dataSize);
-    std::vector<uint8_t> rebuildJPEGFromCriticalData(const std::vector<uint8_t>& critData, const std::vector<int16_t>& acData);
 
-    std::vector<uint8_t> criticalData;
-    std::vector<int16_t> acCoefficientValues;
 };
 
 #endif // JPEG_FILE_HANDLERS_HPP
