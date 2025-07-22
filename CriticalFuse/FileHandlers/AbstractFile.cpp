@@ -218,7 +218,7 @@ ResultCode AbstractFileHandler::writeFile(const char* mappingPath, const char* b
         // Reconstruct full logical file
         size_t totalSize = 0;
         for (const auto& [range, _] : fileMap) {
-            totalSize = std::max(totalSize, range.getEnd() + 1);
+            totalSize = std::max(totalSize, static_cast<size_t>(range.getEnd() + 1));
         }
         mergedBuffer.resize(totalSize, 0);
 
