@@ -69,7 +69,7 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     size = mergedImageSize;
 
     // remove the temporary file
-    unlink(basePath.c_str());
+    unlink((basePath + ".jpg").c_str());
 
     return ResultCode::SUCCESS;
 }
