@@ -132,7 +132,7 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
         for (const auto& [range, _] : handler->getFileMap()) {
             totalSize = std::max(totalSize, range.getEnd() + 1);
         }
-        if (totalSize == 0) {
+        if (totalSize == 0 && access(mappingPath.c_str(), F_OK) == 0) {
             std::cout << "Total size is 0, reading from mapping file" << std::endl;
             std::ifstream mappingFile(mappingPath.c_str());
             std::string line;
