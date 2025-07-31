@@ -10,7 +10,7 @@ class JpegFileHandler : public AbstractFileHandler {
 
 public:
     // must change this to the path of the guetzli binary
-    const static std::string guetzliSplitPath = "/usr/bin/GuetzliSplit";
+    const static std::string guetzliSplitPath = "/usr/local/bin/GuetzliSplit";
 
     JpegFileHandler() = default; // default constructor
     JpegFileHandler(const JpegFileHandler&) = default; // copy constructor
