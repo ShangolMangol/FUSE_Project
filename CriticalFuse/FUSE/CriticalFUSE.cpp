@@ -133,7 +133,7 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
         }
         if (totalSize == 0) {
             std::cout << "Total size is 0, reading from mapping file" << std::endl;
-            std::ifstream mappingFile(mappingPath);
+            std::ifstream mappingFile(mappingPath.c_str());
             std::string line;
             std::getline(mappingFile, line);
             totalSize = std::stoi(line.substr(5));
