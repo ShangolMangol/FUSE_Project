@@ -7,7 +7,10 @@ ResultCode TextFileHandler::createMapping(const char* buffer, size_t size) {
     // to determine critical and non-critical data
 
     // reminder: addToFileMap(int origStart, int origEnd, int mappedStart, int mappedEnd, CriticalType type)
-    
+    if (size == 0) {
+        return ResultCode::SUCCESS;
+    }
+
     size_t i = 0;
     int critOffset = 0;
     int nonCritOffset = 0;
