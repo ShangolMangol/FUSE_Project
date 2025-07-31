@@ -23,6 +23,10 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         file.write(buffer, size);
         file.close();
 
+        std::ofstream mappingFile(mappingFile);
+        mappingFile << "size: " << size << std::endl;
+        mappingFile.close();
+
         // split the file into .jpg.crit and .jpg.noncrit using GuetzliSplit
         std::string command = guetzliSplitPath + " --split " + basePath + " " + basePath + ".crit ";
         std::cout << "Executing split command: " << command << std::endl;
