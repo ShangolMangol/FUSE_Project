@@ -23,7 +23,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         file.write(buffer, size);
         file.close();
 
-        std::ofstream mappingFile(mappingFile);
+        std::ofstream mappingFile(mappingPath);
         mappingFile << "size: " << size << std::endl;
         mappingFile.close();
 
