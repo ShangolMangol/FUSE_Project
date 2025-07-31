@@ -23,8 +23,8 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         file.write(buffer, size);
         file.close();
 
-        // split the file into .crit and .noncrit using GuetzliSplit
-        std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --split " + basePath + " " + basePath + ".crit ";
+        // split the file into .jpg.crit and .jpg.noncrit using GuetzliSplit
+        std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --split " + basePath + " " + basePath + ".jpg.crit ";
         std::cout << "Executing split command: " << command << std::endl;
         char cwd[1024]; getcwd(cwd, sizeof(cwd));
         std::cout << "Current directory: " << cwd << std::endl;
@@ -48,8 +48,8 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     //remove the .jpg from the basePath
     basePath = basePath.substr(0, basePath.size() - 4);
 
-    // merge the .crit and .noncrit files back into a JPEG
-    std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --merge " + basePath + ".crit " + basePath + ".jpg";
+    // merge the .jpg.crit and .jpg.noncrit files back into a JPEG
+    std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --merge " + basePath + ".jpg.crit " + basePath + ".jpg";
     std::cout << "Executing merge command: " << command << std::endl;
     char cwd[1024]; getcwd(cwd, sizeof(cwd));
     std::cout << "Current directory: " << cwd << std::endl;

@@ -187,10 +187,10 @@ void Usage() {
       "  --quality Q    - Visual quality to aim for (JPEG quality value). Default: %d\n"
       "  --memlimit M   - Memory limit in MB. Default: %d\n"
       "  --nomemlimit   - Do not limit memory usage.\n"
-      "  --split        - Output a .crit and .noncrit file instead of a JPEG.\n"
+      "  --split        - Output a .jpg.crit and .jpg.noncrit file instead of a JPEG.\n"
       "                   The output_filename is used as a base name.\n"
-      "  --merge        - Input is a .crit file, merges with corresponding\n"
-      "                   .noncrit file to produce a JPEG.\n",
+      "  --merge        - Input is a .jpg.crit file, merges with corresponding\n"
+      "                   .jpg.noncrit file to produce a JPEG.\n",
       kDefaultJPEGQuality, kDefaultMemlimitMB);
   exit(1);
 }
@@ -250,12 +250,18 @@ int main(int argc, char** argv) {
 
   if (merge_mode) {
     std::string base_path = in_filename;
-    size_t crit_pos = base_path.rfind(".crit");
+    size_t crit_pos = base_path.rfind(".jpg.crit");
     if (crit_pos != std::string::npos) {
       base_path = base_path.substr(0, crit_pos);
+    } else {
+      // Fallback for old .crit format
+      size_t old_crit_pos = base_path.rfind(".crit");
+      if (old_crit_pos != std::string::npos) {
+        base_path = base_path.substr(0, old_crit_pos);
+      }
     }
-    split_opts.merge_crit_path = base_path + ".crit";
-    split_opts.merge_noncrit_path = base_path + ".noncrit";
+    split_opts.merge_crit_path = base_path + ".jpg.crit";
+    split_opts.merge_noncrit_path = base_path + ".jpg.noncrit";
 
     fprintf(stderr, "Merging %s and %s into %s\n",
             split_opts.merge_crit_path.c_str(),
@@ -282,8 +288,8 @@ int main(int argc, char** argv) {
     if (jpeg_pos != std::string::npos) {
         base_path = base_path.substr(0, jpeg_pos);
     }
-    split_opts.crit_path = base_path + ".crit";
-    split_opts.noncrit_path = base_path + ".noncrit";
+    split_opts.crit_path = base_path + ".jpg.crit";
+    split_opts.noncrit_path = base_path + ".jpg.noncrit";
   }
 
   std::string in_data = ReadFileOrDie(in_filename);
