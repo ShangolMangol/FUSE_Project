@@ -15,6 +15,7 @@
 #include <string>
 #include <map>
 #include <iostream>
+#include <fstream>
 
 #include "../FileHandlers/AbstractFile.h"
 #include "../FileHandlers/TextFile.h"
