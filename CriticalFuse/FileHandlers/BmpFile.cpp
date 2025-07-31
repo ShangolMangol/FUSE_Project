@@ -1,6 +1,7 @@
 #include "BmpFile.h"
 #include <cstring>
 #include <cstdint>
+#include <iostream>
 
 ResultCode BmpFileHandler::createMapping(const char* buffer, size_t size) {
     std::cout << "Creating mapping for BMP file" << std::endl;
