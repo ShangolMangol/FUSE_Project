@@ -137,7 +137,13 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
             std::ifstream mappingFile(mappingPath.c_str());
             std::string line;
             std::getline(mappingFile, line);
-            totalSize = std::stoi(line.substr(5));
+            if (line.find("size:") != std::string::npos) {
+                totalSize = std::stoi(line.substr(5));
+            }
+            else {
+                std::cout << "Mapping file does not contain size, setting to 100KB" << std::endl;
+                totalSize = 100*1024;
+            }
             mappingFile.close();
         }
         stbuf->st_size = totalSize;
