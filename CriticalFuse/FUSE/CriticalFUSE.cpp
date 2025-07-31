@@ -132,7 +132,7 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
         for (const auto& [range, _] : handler->getFileMap()) {
             totalSize = std::max(totalSize, range.getEnd() + 1);
         }
-        if (totalSize == 0 && access(mappingPath.c_str(), F_OK) == 0 && handler->getFileMap().size() > 0) {
+        if (totalSize == 0 && access(mappingPath.c_str(), F_OK) == 0) {
             std::cout << "Total size is 0, reading from mapping file" << std::endl;
             std::ifstream mappingFile(mappingPath.c_str());
             std::string line;
@@ -303,12 +303,13 @@ static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_inf
             std::cerr << "Failed to create mapping for file: " << path << std::endl;
             return -errno;
         }
+        std::cout << "Mapping file created" << std::endl;
         if (handler->saveMapToFile(mappingPath.c_str()) != ResultCode::SUCCESS) {
             unlink(fpath); // Clean up the created file
             std::cerr << "Failed to save mapping file: " << mappingPath << std::endl;
             return -errno;
         }
-        std::cout << "Created mapping file: " << mappingPath << std::endl;
+        std::cout << "Saved mapping file: " << mappingPath << std::endl;
 
         return 0;
     }
