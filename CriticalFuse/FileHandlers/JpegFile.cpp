@@ -24,7 +24,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         file.close();
 
         // split the file into .jpg.crit and .jpg.noncrit using GuetzliSplit
-        std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --split " + basePath + " " + basePath + ".jpg.crit ";
+        std::string command = "/home/shangol-mangol/Desktop/FuseProject/FUSE_Project/CriticalFuse/GuetzliSplit --split " + basePath + " " + basePath + ".crit ";
         std::cout << "Executing split command: " << command << std::endl;
         char cwd[1024]; getcwd(cwd, sizeof(cwd));
         std::cout << "Current directory: " << cwd << std::endl;
