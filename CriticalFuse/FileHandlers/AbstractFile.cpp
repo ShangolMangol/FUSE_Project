@@ -43,8 +43,17 @@ ResultCode AbstractFileHandler::loadMapFromFile(const char* mappingPath) {
     }
 
     std::string line;
+    bool foundRanges = false;
 
     while (std::getline(inFile, line)) {
+        // Skip lines until we find 'Ranges'
+        if (!foundRanges) {
+            if (line.find("Ranges") != std::string::npos) {
+                foundRanges = true;
+            }
+            continue;
+        }
+
         std::istringstream iss(line);
         std::string originalRangeStr, mappedRangeStr, typeStr;
 
@@ -97,6 +106,9 @@ ResultCode AbstractFileHandler::saveMapToFile(const char* mappingPath) {
         std::cerr << "Failed to open file for writing: " << mappingPath << std::endl;
         return ResultCode::FAILURE;
     }
+
+    // Write the Ranges header
+    outFile << "Ranges" << '\n';
 
     for (const auto& entry : fileMap) {
         const Range& original_range = entry.first;
