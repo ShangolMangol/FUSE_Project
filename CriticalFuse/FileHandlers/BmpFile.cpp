@@ -3,6 +3,7 @@
 #include <cstdint>
 
 ResultCode BmpFileHandler::createMapping(const char* buffer, size_t size) {
+    std::cout << "Creating mapping for BMP file" << std::endl;
     if (size == 0) {
         return ResultCode::SUCCESS; // Nothing to map
     }
