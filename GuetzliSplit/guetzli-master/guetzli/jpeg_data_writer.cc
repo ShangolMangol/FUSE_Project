@@ -23,10 +23,12 @@
 #include <cstdio>
 #include <vector>
 #include <string>
+#include <cstdint>
 
 #include "guetzli/entropy_encode.h"
 #include "guetzli/fast_log.h"
 #include "guetzli/jpeg_bit_writer.h"
+#include "guetzli/jpeg_huffman_decode.h"
 
 namespace guetzli {
 
@@ -59,7 +61,12 @@ void SimpleBitWriter::Flush() {
 }
 void SimpleBitWriter::WriteToFile(FILE* f) {
     Flush();
-    fwrite(data.data(), 1, data.size(), f);
+    fprintf(stderr, "Writing %zu bytes to file\n", data.size());
+    size_t written = fwrite(data.data(), 1, data.size(), f);
+    fprintf(stderr, "Actually written: %zu bytes\n", written);
+    if (written != data.size()) {
+        fprintf(stderr, "ERROR: Expected to write %zu bytes but wrote %zu\n", data.size(), written);
+    }
 }
 
 // -- Definition for SimpleBitReader --
@@ -462,11 +469,12 @@ std::vector<uint8_t> ReadFileToVec(const std::string& path) {
 // -- Start of functions with external linkage --
 
 void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer) {
+  // Write only the actual coefficient value bits for non-zero coefficients
+  // The Huffman-coded (run-length, size) tuples stay in the critical file
   for (int k = 1; k < 64; ++k) {
     coeff_t val = coeffs[kJPEGNaturalOrder[k]];
     if (val == 0) {
-      writer->WriteBits(0, 4); // nbits = 0
-      continue;
+      continue; // Skip zeros - they're handled by run-length encoding in crit file
     }
     
     coeff_t temp = val;
@@ -480,25 +488,29 @@ void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer) {
     }
     
     int nbits = Log2FloorNonZero(temp) + 1;
-    writer->WriteBits(nbits, 4);
-    
+    // Only write the actual coefficient value bits (no nbits)
     if (nbits > 0) {
         writer->WriteBits(temp2 & ((1 << nbits) - 1), nbits);
     }
   }
 }
 
-void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader) {
+void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader, const std::vector<int>& ac_sizes) {
+  int size_index = 0;
   for (int k = 1; k < 64; ++k) {
-    int nbits = reader->ReadBits(4);
-    if (nbits == 0) {
-      coeffs[kJPEGNaturalOrder[k]] = 0;
-    } else {
-      int val = reader->ReadBits(nbits);
-      if (val < (1 << (nbits - 1))) {
-        val -= (1 << nbits) - 1;
+    if (size_index < ac_sizes.size()) {
+      int nbits = ac_sizes[size_index++];
+      if (nbits > 0) {
+        int val = reader->ReadBits(nbits);
+        if (val < (1 << (nbits - 1))) {
+          val -= (1 << nbits) - 1;
+        }
+        coeffs[kJPEGNaturalOrder[k]] = val;
+      } else {
+        coeffs[kJPEGNaturalOrder[k]] = 0;
       }
-      coeffs[kJPEGNaturalOrder[k]] = val;
+    } else {
+      coeffs[kJPEGNaturalOrder[k]] = 0;
     }
   }
 }
@@ -654,20 +666,130 @@ size_t ClusterHistograms(JpegHistogram* histo, size_t* num,
   return (total_cost + 7) / 8;
 }
 
+// Helper function to write AC coefficient sizes to a custom APP marker
+bool WriteACSizesMarker(const JPEGData& jpg, JPEGOutput out) {
+  // Collect all AC coefficient sizes from the original data
+  std::vector<uint8_t> sizes;
+  for (auto& comp : jpg.components) {
+    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+      for (int k = 1; k < 64; ++k) {
+        coeff_t val = comp.coeffs[i + kJPEGNaturalOrder[k]];
+        if (val != 0) {
+          int nbits = Log2FloorNonZero(std::abs(val)) + 1;
+          sizes.push_back(nbits);
+        } else {
+          sizes.push_back(0);
+        }
+      }
+    }
+  }
+  
+  fprintf(stderr, "Writing AC coefficient sizes marker with %zu sizes\n", sizes.size());
+  
+  // Write custom APP1 marker with AC coefficient sizes
+  std::vector<uint8_t> marker_data;
+  marker_data.push_back('A');
+  marker_data.push_back('C');
+  marker_data.push_back('S');
+  marker_data.push_back('I');
+  marker_data.insert(marker_data.end(), sizes.begin(), sizes.end());
+  
+  // Write APP1 marker
+  uint8_t app1_header[4] = { 0xff, 0xe1, 
+                              static_cast<uint8_t>((marker_data.size() + 2) >> 8),
+                              static_cast<uint8_t>((marker_data.size() + 2) & 0xff) };
+  
+  fprintf(stderr, "APP1 marker size: %d bytes\n", (marker_data.size() + 2));
+  
+  return (JPEGWrite(out, app1_header, sizeof(app1_header)) &&
+          JPEGWrite(out, marker_data.data(), marker_data.size()));
+}
+
 bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
                const SplitMergeOptions* split_merge_opts) {
   static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
   static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
   std::vector<HuffmanCodeTable> dc_codes;
   std::vector<HuffmanCodeTable> ac_codes;
-  return (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
+  
+  bool result = JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker));
+  
+  return (result &&
           EncodeMetadata(jpg, strip_metadata, out) &&
+          // If splitting, write AC coefficient sizes marker after existing metadata
+          (!split_merge_opts || !split_merge_opts->split_jpeg || 
+           (fprintf(stderr, "Splitting JPEG - writing AC coefficient sizes marker\n"), 
+            WriteACSizesMarker(jpg, out))) &&
           EncodeDQT(jpg.quant, out) &&
           EncodeSOF(jpg, out) &&
           BuildAndEncodeHuffmanCodes(jpg, out, &dc_codes, &ac_codes) &&
           EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
           JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
           (strip_metadata || JPEGWrite(out, jpg.tail_data)));
+}
+
+// Helper function to extract AC coefficient sizes from the critical file
+std::vector<int> ExtractACSizesFromHuffmanData(const JPEGData& jpg, const std::string& crit_data) {
+  std::vector<int> ac_sizes;
+  
+  // Look for a custom APP marker that contains the AC coefficient sizes
+  // This would be added during the split process
+  fprintf(stderr, "Searching for AC coefficient sizes marker in %zu bytes\n", crit_data.size());
+  
+  for (size_t i = 0; i < crit_data.size() - 2; ++i) {
+    if (crit_data[i] == 0xFF && crit_data[i + 1] == 0xE1) {
+      fprintf(stderr, "Found APP1 marker at position %zu\n", i);
+      // Found APP1 marker - check if it's our custom marker
+      if (i + 4 < crit_data.size()) {
+        int marker_len = (crit_data[i + 2] << 8) | crit_data[i + 3];
+        fprintf(stderr, "APP1 marker length: %d bytes\n", marker_len);
+        if (i + 4 + marker_len <= crit_data.size()) {
+          // Check if this is our custom marker
+          std::string marker_data(crit_data.begin() + i + 4, 
+                                 crit_data.begin() + i + 4 + marker_len);
+          fprintf(stderr, "Marker data starts with: %c%c%c%c\n", 
+                  marker_data[0], marker_data[1], marker_data[2], marker_data[3]);
+          if (marker_data.substr(0, 4) == "ACSI") {
+            fprintf(stderr, "Found our custom AC coefficient sizes marker!\n");
+            // Found our custom marker with AC coefficient sizes
+            // Parse the sizes from the marker data
+            size_t pos = 4;
+            while (pos < marker_data.size()) {
+              if (pos + 1 < marker_data.size()) {
+                int size = marker_data[pos];
+                ac_sizes.push_back(size);
+                pos++;
+              } else {
+                break;
+              }
+            }
+            fprintf(stderr, "Extracted %zu AC coefficient sizes\n", ac_sizes.size());
+            return ac_sizes;
+          }
+        }
+      }
+    }
+  }
+  
+  // If no custom marker found, use default sizes
+  fprintf(stderr, "No AC coefficient sizes marker found, using defaults\n");
+  for (auto& comp : jpg.components) {
+    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+      for (int k = 1; k < 64; ++k) {
+        int nbits = 0;
+        if (k < 10) {
+          nbits = 4; // Low frequency coefficients
+        } else if (k < 30) {
+          nbits = 3; // Mid frequency coefficients  
+        } else {
+          nbits = 2; // High frequency coefficients
+        }
+        ac_sizes.push_back(nbits);
+      }
+    }
+  }
+  
+  return ac_sizes;
 }
 
 bool MergeCritNoncrit(const std::string& crit_path,
@@ -695,9 +817,12 @@ bool MergeCritNoncrit(const std::string& crit_path,
   }
   SimpleBitReader reader(noncrit_vec.data(), noncrit_vec.size());
 
+  // Extract AC coefficient sizes from the critical file's Huffman-coded data
+  std::vector<int> ac_sizes = ExtractACSizesFromHuffmanData(jpg, crit_data_str);
+
   for (auto& comp : jpg.components) {
     for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
-      ReadACBitsFromNoncrit(&comp.coeffs[i], &reader);
+      ReadACBitsFromNoncrit(&comp.coeffs[i], &reader, ac_sizes);
     }
   }
 

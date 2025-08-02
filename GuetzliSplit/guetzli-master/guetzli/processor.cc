@@ -906,19 +906,31 @@ bool Process(const Params& params, ProcessStats* stats,
       return false;
     }
     guetzli::SimpleBitWriter writer;
+    int total_blocks = 0;
+    int non_zero_coeffs = 0;
     for (auto& comp : jpg.components) {
       for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+        total_blocks++;
+        // Count non-zero AC coefficients in this block
+        for (int k = 1; k < 64; ++k) {
+          if (comp.coeffs[i + k] != 0) {
+            non_zero_coeffs++;
+          }
+        }
         guetzli::WriteACBitsToNoncrit(&comp.coeffs[i], &writer);
       }
     }
+    fprintf(stderr, "Total blocks: %d, Non-zero AC coefficients: %d\n", total_blocks, non_zero_coeffs);
+    fprintf(stderr, "Noncrit data size before flush: %zu bytes\n", writer.data.size());
     writer.WriteToFile(f);
+    fprintf(stderr, "Noncrit file written: %zu bytes\n", writer.data.size());
     fclose(f);
     // Write .crit: zero AC value bits in a copy, but preserve structure
     guetzli::JPEGData crit_jpg = jpg;
     guetzli::ZeroACValueBits(&crit_jpg);
     std::string crit_data;
     guetzli::JPEGOutput crit_output(guetzli::GuetzliStringOut, &crit_data);
-    if (!guetzli::WriteJpeg(crit_jpg, false, crit_output, nullptr)) {
+    if (!guetzli::WriteJpeg(crit_jpg, false, crit_output, split_opts)) {
       fprintf(stderr, "Failed to write .crit file\n");
       return false;
     }

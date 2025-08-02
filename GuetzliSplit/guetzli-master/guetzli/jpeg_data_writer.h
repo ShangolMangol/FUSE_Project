@@ -119,7 +119,7 @@ size_t ClusterHistograms(JpegHistogram* histo, size_t* num, int* histo_indexes,
 
 // Functions for split/merge logic
 void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer);
-void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader);
+void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader, const std::vector<int>& ac_sizes);
 
 }  // namespace guetzli
 
