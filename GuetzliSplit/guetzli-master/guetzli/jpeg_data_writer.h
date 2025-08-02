@@ -40,8 +40,10 @@ struct SplitMergeOptions {
   bool merge_jpeg = false;
   std::string crit_path;
   std::string noncrit_path;
+  std::string nbits_path;
   std::string merge_crit_path;
   std::string merge_noncrit_path;
+  std::string merge_nbits_path;
 };
 
 // Function pointer type used to write len bytes into buf.
@@ -120,6 +122,12 @@ size_t ClusterHistograms(JpegHistogram* histo, size_t* num, int* histo_indexes,
 // Functions for split/merge logic
 void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer);
 void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader);
+
+// New functions for separated nbits and values
+void WriteACNbitsToFile(const coeff_t* coeffs, SimpleBitWriter* writer);
+void WriteACValuesToFile(const coeff_t* coeffs, SimpleBitWriter* writer);
+void ReadACNbitsFromFile(coeff_t* coeffs, SimpleBitReader* reader);
+void ReadACValuesFromFile(coeff_t* coeffs, SimpleBitReader* reader);
 
 }  // namespace guetzli
 

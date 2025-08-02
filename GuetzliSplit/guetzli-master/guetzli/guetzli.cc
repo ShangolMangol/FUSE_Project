@@ -262,9 +262,11 @@ int main(int argc, char** argv) {
     }
     split_opts.merge_crit_path = base_path + ".jpg.crit";
     split_opts.merge_noncrit_path = base_path + ".jpg.noncrit";
+    split_opts.merge_nbits_path = base_path + ".jpg.nbits.crit";
 
-    fprintf(stderr, "Merging %s and %s into %s\n",
+    fprintf(stderr, "Merging %s, %s, and %s into %s\n",
             split_opts.merge_crit_path.c_str(),
+            split_opts.merge_nbits_path.c_str(),
             split_opts.merge_noncrit_path.c_str(),
             out_filename);
 
@@ -290,6 +292,7 @@ int main(int argc, char** argv) {
     }
     split_opts.crit_path = base_path + ".jpg.crit";
     split_opts.noncrit_path = base_path + ".jpg.noncrit";
+    split_opts.nbits_path = base_path + ".jpg.nbits.crit";
   }
 
   std::string in_data = ReadFileOrDie(in_filename);
@@ -345,11 +348,12 @@ int main(int argc, char** argv) {
   }
 
   if (split_mode) {
-    // The .noncrit file is written during Process. We just need to write the
+    // The .noncrit and .nbits.crit files are written during Process. We just need to write the
     // .crit file, which is returned in out_data.
     fprintf(stderr, "Writing %s\n", split_opts.crit_path.c_str());
     WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
     fprintf(stderr, "Wrote %s\n", split_opts.noncrit_path.c_str());
+    fprintf(stderr, "Wrote %s\n", split_opts.nbits_path.c_str());
   } else {
     WriteFileOrDie(out_filename, out_data);
   }

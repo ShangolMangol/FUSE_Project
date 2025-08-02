@@ -899,7 +899,22 @@ bool Process(const Params& params, ProcessStats* stats,
       fprintf(stderr, "Can't read jpg data from input file\n");
       return false;
     }
-    // Write .noncrit from original ACs
+    // Write .nbits.crit from original AC nbits
+    FILE* nbits_f = fopen(split_opts->nbits_path.c_str(), "wb");
+    if (!nbits_f) {
+      fprintf(stderr, "Failed to open nbits file for writing: %s\n", split_opts->nbits_path.c_str());
+      return false;
+    }
+    guetzli::SimpleBitWriter nbits_writer;
+    for (auto& comp : jpg.components) {
+      for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+        guetzli::WriteACNbitsToFile(&comp.coeffs[i], &nbits_writer);
+      }
+    }
+    nbits_writer.WriteToFile(nbits_f);
+    fclose(nbits_f);
+    
+    // Write .noncrit from original AC values
     FILE* f = fopen(split_opts->noncrit_path.c_str(), "wb");
     if (!f) {
       fprintf(stderr, "Failed to open noncrit file for writing: %s\n", split_opts->noncrit_path.c_str());
@@ -908,7 +923,7 @@ bool Process(const Params& params, ProcessStats* stats,
     guetzli::SimpleBitWriter writer;
     for (auto& comp : jpg.components) {
       for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
-        guetzli::WriteACBitsToNoncrit(&comp.coeffs[i], &writer);
+        guetzli::WriteACValuesToFile(&comp.coeffs[i], &writer);
       }
     }
     writer.WriteToFile(f);

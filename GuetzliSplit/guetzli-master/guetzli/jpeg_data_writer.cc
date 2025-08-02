@@ -503,6 +503,75 @@ void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader) {
   }
 }
 
+void WriteACNbitsToFile(const coeff_t* coeffs, SimpleBitWriter* writer) {
+  for (int k = 1; k < 64; ++k) {
+    coeff_t val = coeffs[kJPEGNaturalOrder[k]];
+    if (val == 0) {
+      writer->WriteBits(0, 4); // nbits = 0
+    } else {
+      coeff_t temp = val;
+      if (temp < 0) {
+        temp = -temp;
+      }
+      int nbits = Log2FloorNonZero(temp) + 1;
+      writer->WriteBits(nbits, 4);
+    }
+  }
+}
+
+void WriteACValuesToFile(const coeff_t* coeffs, SimpleBitWriter* writer) {
+  for (int k = 1; k < 64; ++k) {
+    coeff_t val = coeffs[kJPEGNaturalOrder[k]];
+    if (val == 0) {
+      continue; // Skip zero values
+    }
+    
+    coeff_t temp = val;
+    coeff_t temp2;
+
+    if (temp < 0) {
+      temp = -temp;
+      temp2 = ~temp;
+    } else {
+      temp2 = temp;
+    }
+    
+    int nbits = Log2FloorNonZero(temp) + 1;
+    if (nbits > 0) {
+        writer->WriteBits(temp2 & ((1 << nbits) - 1), nbits);
+    }
+  }
+}
+
+void ReadACNbitsFromFile(coeff_t* coeffs, SimpleBitReader* reader) {
+  for (int k = 1; k < 64; ++k) {
+    int nbits = reader->ReadBits(4);
+    if (nbits == 0) {
+      coeffs[kJPEGNaturalOrder[k]] = 0;
+    } else {
+      // Store nbits temporarily, we'll read the actual values later
+      coeffs[kJPEGNaturalOrder[k]] = nbits;
+    }
+  }
+}
+
+void ReadACValuesFromFile(coeff_t* coeffs, SimpleBitReader* reader) {
+  for (int k = 1; k < 64; ++k) {
+    coeff_t stored = coeffs[kJPEGNaturalOrder[k]];
+    if (stored == 0) {
+      // Already set to 0, no need to read value
+      continue;
+    }
+    
+    int nbits = static_cast<int>(stored);
+    int val = reader->ReadBits(nbits);
+    if (val < (1 << (nbits - 1))) {
+      val -= (1 << nbits) - 1;
+    }
+    coeffs[kJPEGNaturalOrder[k]] = val;
+  }
+}
+
 size_t HistogramHeaderCost(const JpegHistogram& histo) {
   size_t header_bits = 17 * 8;
   for (int i = 0; i + 1 < JpegHistogram::kSize; ++i) {
@@ -688,16 +757,61 @@ bool MergeCritNoncrit(const std::string& crit_path,
     return false;
   }
 
-  std::vector<uint8_t> noncrit_vec = ReadFileToVec(noncrit_path);
-  if (noncrit_vec.empty()) {
+  // Try to determine if we're using the new format (separated nbits and values)
+  // by checking if the nbits file exists
+  std::string base_path = crit_path;
+  size_t crit_pos = base_path.rfind(".jpg.crit");
+  if (crit_pos != std::string::npos) {
+    base_path = base_path.substr(0, crit_pos);
+  } else {
+    // Fallback for old .crit format
+    size_t old_crit_pos = base_path.rfind(".crit");
+    if (old_crit_pos != std::string::npos) {
+      base_path = base_path.substr(0, old_crit_pos);
+    }
+  }
+  std::string nbits_path = base_path + ".jpg.nbits.crit";
+  
+  // Check if nbits file exists to determine format
+  FILE* test_nbits = fopen(nbits_path.c_str(), "rb");
+  bool use_new_format = (test_nbits != nullptr);
+  if (test_nbits) fclose(test_nbits);
+  
+  if (use_new_format) {
+    // New format: separate nbits and values files
+    std::vector<uint8_t> nbits_vec = ReadFileToVec(nbits_path);
+    if (nbits_vec.empty()) {
+      fprintf(stderr, "Failed to read nbits file: %s\n", nbits_path.c_str());
+      return false;
+    }
+    SimpleBitReader nbits_reader(nbits_vec.data(), nbits_vec.size());
+    
+    std::vector<uint8_t> noncrit_vec = ReadFileToVec(noncrit_path);
+    if (noncrit_vec.empty()) {
       fprintf(stderr, "Failed to read non-critical file: %s\n", noncrit_path.c_str());
       return false;
-  }
-  SimpleBitReader reader(noncrit_vec.data(), noncrit_vec.size());
+    }
+    SimpleBitReader values_reader(noncrit_vec.data(), noncrit_vec.size());
 
-  for (auto& comp : jpg.components) {
-    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
-      ReadACBitsFromNoncrit(&comp.coeffs[i], &reader);
+    for (auto& comp : jpg.components) {
+      for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+        ReadACNbitsFromFile(&comp.coeffs[i], &nbits_reader);
+        ReadACValuesFromFile(&comp.coeffs[i], &values_reader);
+      }
+    }
+  } else {
+    // Old format: combined noncrit file
+    std::vector<uint8_t> noncrit_vec = ReadFileToVec(noncrit_path);
+    if (noncrit_vec.empty()) {
+      fprintf(stderr, "Failed to read non-critical file: %s\n", noncrit_path.c_str());
+      return false;
+    }
+    SimpleBitReader reader(noncrit_vec.data(), noncrit_vec.size());
+
+    for (auto& comp : jpg.components) {
+      for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+        ReadACBitsFromNoncrit(&comp.coeffs[i], &reader);
+      }
     }
   }
 
