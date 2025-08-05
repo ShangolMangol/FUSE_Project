@@ -87,43 +87,51 @@ bool MergeSplitFiles(const std::string& base_name) {
          dc_raw_bits = dc_reader.ReadBits(dc_huffman_symbol); // Read exactly SIZE bits for the raw bits
        }
       
-             if (dc_huffman_symbol > 0) {
-         // Reconstruct DC coefficient using the raw bits
-         int dc_diff = dc_raw_bits;
-         if (dc_diff < (1 << (dc_huffman_symbol - 1))) {
-           dc_diff -= (1 << dc_huffman_symbol) - 1;
-         }
-         block_coeffs[0] = last_dc_coeff[comp_idx] + dc_diff;
-         last_dc_coeff[comp_idx] = block_coeffs[0];
-       } else {
-         block_coeffs[0] = last_dc_coeff[comp_idx];
-       }
-
-             // Read AC coefficients using Huffman symbol data
-       int k = 1; // Start from first AC coefficient
-       while (k < 64) {
-         int ac_huffman_symbol = rlesize_reader.ReadBits(8); // Read AC Huffman symbol (RLE+size)
-         int rle = ac_huffman_symbol >> 4;
-         int size = ac_huffman_symbol & 15;
-        
-        // Skip zeros based on RLE
-        k += rle;
-        
-        if (k >= 64) break; // End of block
-        
-        if (size > 0) {
-          int ac_raw_bits = ac_reader.ReadBits(size); // Read size bits for AC coefficient
-          // Reconstruct AC coefficient using raw bits
-          int ac_val = ac_raw_bits;
-          if (ac_val < (1 << (size - 1))) {
-            ac_val -= (1 << size) - 1;
-          }
-          block_coeffs[k] = static_cast<guetzli::coeff_t>(ac_val);
-        } else {
-          block_coeffs[k] = 0;
+                   if (dc_huffman_symbol > 0) {
+        // Reconstruct DC coefficient using the raw bits
+        // Apply HuffExtend logic: (x < (1 << (s - 1)) ? x - (1 << s) + 1 : x)
+        int dc_diff = dc_raw_bits;
+        if (dc_diff < (1 << (dc_huffman_symbol - 1))) {
+          dc_diff -= (1 << dc_huffman_symbol) - 1;
         }
-        k++;
+        block_coeffs[0] = last_dc_coeff[comp_idx] + dc_diff;
+        last_dc_coeff[comp_idx] = block_coeffs[0];
+      } else {
+        block_coeffs[0] = last_dc_coeff[comp_idx];
       }
+
+                   // Read AC coefficients using Huffman symbol data
+      int k = 1; // Start from first AC coefficient
+      while (k < 64) {
+        int ac_huffman_symbol = rlesize_reader.ReadBits(8); // Read AC Huffman symbol (RLE+size)
+        int rle = ac_huffman_symbol >> 4;
+        int size = ac_huffman_symbol & 15;
+       
+       // Skip zeros based on RLE
+       k += rle;
+       
+       if (k >= 64) break; // End of block
+       
+       if (size > 0) {
+         int ac_raw_bits = ac_reader.ReadBits(size); // Read size bits for AC coefficient
+         // Reconstruct AC coefficient using raw bits
+         // Apply HuffExtend logic: (x < (1 << (s - 1)) ? x - (1 << s) + 1 : x)
+         int ac_val = ac_raw_bits;
+         if (ac_val < (1 << (size - 1))) {
+           ac_val -= (1 << size) - 1;
+         }
+         // Apply SignedLeftshift: (v >= 0) ? (v << Al) : -((-v) << Al)
+         // Note: Al is 0 for baseline JPEG, so this is just a cast
+         block_coeffs[k] = static_cast<guetzli::coeff_t>(ac_val);
+         k++;
+       } else if (rle == 15) {
+         // 16 zeros, continue to next coefficient
+         k++;
+       } else {
+         // End of block reached
+         break;
+       }
+     }
       
       // Fill remaining coefficients with zeros
       while (k < 64) {
