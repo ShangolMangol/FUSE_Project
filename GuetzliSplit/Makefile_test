@@ -27,7 +27,7 @@ GUETZLI_SOURCES = \
 
 # Third party sources
 THIRD_PARTY_SOURCES = \
-	guetzli-master/third_party/butteraugli/butteraugli.cc
+	guetzli-master/third_party/butteraugli/butteraugli/butteraugli.cc
 
 # Object files
 GUETZLI_OBJECTS = $(GUETZLI_SOURCES:.cc=.o)
