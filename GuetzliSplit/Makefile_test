@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++11 -O2 -Wall -Wextra
 INCLUDES = -Iguetzli-master -Iguetzli-master/third_party/butteraugli
 LIBS = -lm
 
-# Guetzli source files (all necessary files for JPEG processing)
+# Guetzli source files (only files that actually exist)
 GUETZLI_SOURCES = \
 	guetzli-master/guetzli/jpeg_data_reader.cc \
 	guetzli-master/guetzli/jpeg_data_writer.cc \
@@ -16,10 +16,8 @@ GUETZLI_SOURCES = \
 	guetzli-master/guetzli/score.cc \
 	guetzli-master/guetzli/processor.cc \
 	guetzli-master/guetzli/butteraugli_comparator.cc \
-	guetzli-master/guetzli/color_transform.cc \
 	guetzli-master/guetzli/debug_print.cc \
 	guetzli-master/guetzli/gamma_correct.cc \
-	guetzli-master/guetzli/jpeg_bit_writer.cc \
 	guetzli-master/guetzli/jpeg_data_decoder.cc \
 	guetzli-master/guetzli/jpeg_data_encoder.cc \
 	guetzli-master/guetzli/jpeg_huffman_decode.cc \
