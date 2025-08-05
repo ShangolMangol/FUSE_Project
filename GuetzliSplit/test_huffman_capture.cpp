@@ -70,16 +70,15 @@ bool MergeSplitFiles(const std::string& base_name) {
   guetzli::SimpleBitReader ac_reader(ac_data.data(), ac_data.size());
 
   // Reconstruct the coefficients from the split data
-  coeff_t last_dc_coeff[3] = {0}; // Assuming max 3 components
+  guetzli::coeff_t last_dc_coeff[3] = {0}; // Assuming max 3 components
   
   for (size_t comp_idx = 0; comp_idx < jpg.components.size(); comp_idx++) {
     auto& comp = jpg.components[comp_idx];
     
     for (size_t i = 0; i < comp.coeffs.size(); i += 64) { // 64 coefficients per block
-      coeff_t* block_coeffs = &comp.coeffs[i];
+      guetzli::coeff_t* block_coeffs = &comp.coeffs[i];
       
       // Read DC coefficient data
-      int dc_symbol = dc_reader.ReadBits(8);
       int dc_nbits = dc_reader.ReadBits(8);
       
       if (dc_nbits > 0) {
