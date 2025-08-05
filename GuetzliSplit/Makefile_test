@@ -1,35 +1,68 @@
 CXX = g++
 CXXFLAGS = -std=c++11 -O2 -Wall -Wextra
-INCLUDES = -Iguetzli-master
+INCLUDES = -Iguetzli-master -Iguetzli-master/third_party/butteraugli
 LIBS = -lm
 
-SOURCES = test_huffman_capture.cpp \
-           guetzli-master/guetzli/jpeg_data_reader.cc \
-           guetzli-master/guetzli/jpeg_data_writer.cc \
-           guetzli-master/guetzli/jpeg_huffman_decode.cc \
-           guetzli-master/guetzli/entropy_encode.cc \
-           guetzli-master/guetzli/jpeg_data.cc
+# Guetzli source files (all necessary files for JPEG processing)
+GUETZLI_SOURCES = \
+	guetzli-master/guetzli/jpeg_data_reader.cc \
+	guetzli-master/guetzli/jpeg_data_writer.cc \
+	guetzli-master/guetzli/jpeg_data.cc \
+	guetzli-master/guetzli/entropy_encode.cc \
+	guetzli-master/guetzli/dct_double.cc \
+	guetzli-master/guetzli/fdct.cc \
+	guetzli-master/guetzli/idct.cc \
+	guetzli-master/guetzli/quantize.cc \
+	guetzli-master/guetzli/score.cc \
+	guetzli-master/guetzli/processor.cc \
+	guetzli-master/guetzli/butteraugli_comparator.cc \
+	guetzli-master/guetzli/color_transform.cc \
+	guetzli-master/guetzli/debug_print.cc \
+	guetzli-master/guetzli/gamma_correct.cc \
+	guetzli-master/guetzli/jpeg_bit_writer.cc \
+	guetzli-master/guetzli/jpeg_data_decoder.cc \
+	guetzli-master/guetzli/jpeg_data_encoder.cc \
+	guetzli-master/guetzli/jpeg_huffman_decode.cc \
+	guetzli-master/guetzli/output_image.cc \
+	guetzli-master/guetzli/preprocess_downsample.cc \
+	guetzli-master/guetzli/quality.cc
 
-OBJECTS = $(SOURCES:.cc=.o)
-OBJECTS := $(OBJECTS:.cpp=.o)
+# Third party sources
+THIRD_PARTY_SOURCES = \
+	guetzli-master/third_party/butteraugli/butteraugli.cc
 
+# Object files
+GUETZLI_OBJECTS = $(GUETZLI_SOURCES:.cc=.o)
+THIRD_PARTY_OBJECTS = $(THIRD_PARTY_SOURCES:.cc=.o)
+OBJECTS = $(GUETZLI_OBJECTS) $(THIRD_PARTY_OBJECTS)
+
+# Target executable
 TARGET = test_huffman_capture
-
-.PHONY: all clean
 
 all: $(TARGET)
 
-$(TARGET): $(OBJECTS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
+$(TARGET): test_huffman_capture.cpp $(OBJECTS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(OBJECTS) $(LIBS)
 
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
-
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
 
 clean:
 	rm -f $(OBJECTS) $(TARGET)
+	rm -f *.jpg.headers *.jpg.rlesize *.jpg.dc *.jpg.ac *_merged.jpg
 
 test: $(TARGET)
-	./$(TARGET) sample-jpeg-16x16.jpg 
+	./$(TARGET) test sample-jpeg-16x16.jpg
+
+# Check if all source files exist
+check-sources:
+	@echo "Checking source files..."
+	@for file in $(GUETZLI_SOURCES) $(THIRD_PARTY_SOURCES); do \
+		if [ ! -f $$file ]; then \
+			echo "ERROR: Source file $$file not found!"; \
+			exit 1; \
+		fi; \
+	done
+	@echo "All source files found."
+
+.PHONY: all clean test check-sources 
