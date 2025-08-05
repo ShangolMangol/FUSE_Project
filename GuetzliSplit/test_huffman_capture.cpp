@@ -1,5 +1,6 @@
 #include "guetzli/jpeg_data_reader.h"
 #include "guetzli/jpeg_data_writer.h"
+#include "guetzli/jpeg_error.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -140,7 +141,12 @@ bool MergeSplitFiles(const std::string& base_name) {
         int ac_huffman_symbol = rlesize_reader.ReadBits(8); // Read AC Huffman symbol (RLE+size)
         int rle = ac_huffman_symbol >> 4;
         int size = ac_huffman_symbol & 15;
-       
+        
+        // Debug: Print symbol information
+        if (size == 0 && rle != 15) {
+          std::cout << "  EOB symbol: RLE=" << rle << ", Size=" << size << std::endl;
+        }
+        
         if (size > 0) {
           // Skip zeros based on RLE
           k += rle;
@@ -165,7 +171,7 @@ bool MergeSplitFiles(const std::string& base_name) {
           // End of block reached - set up EOB run
           eobrun = 1 << rle;
           if (rle > 0) {
-            // Read additional EOB run bits
+            // Read additional EOB run bits from rlesize file (they were captured there)
             int additional_bits = rlesize_reader.ReadBits(rle);
             eobrun += additional_bits;
           }
@@ -186,6 +192,9 @@ bool MergeSplitFiles(const std::string& base_name) {
   // Write the reconstructed JPEG
   std::string output_data;
   guetzli::JPEGOutput output(StringOut, &output_data);
+  
+  // Clear any error state that might have been set during reconstruction
+  jpg.error = JPEG_OK;
   
   if (!guetzli::WriteJpeg(jpg, false, output, nullptr)) {
     std::cerr << "Failed to write merged JPEG" << std::endl;

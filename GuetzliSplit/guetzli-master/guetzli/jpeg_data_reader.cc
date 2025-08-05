@@ -723,7 +723,12 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
             jpg->error = JPEG_EOB_RUN_TOO_LONG;
             return false;
           }
-          *eobrun += br->ReadBits(r);
+          int additional_bits = br->ReadBits(r);
+          *eobrun += additional_bits;
+          // Capture the additional EOB run bits
+          if (rlesize_writer) {
+            rlesize_writer->WriteBits(additional_bits, r);
+          }
         }
         break;
       }
@@ -756,7 +761,12 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
             jpg->error = JPEG_EOB_RUN_TOO_LONG;
             return false;
           }
-          *eobrun += br->ReadBits(r);
+          int additional_bits = br->ReadBits(r);
+          *eobrun += additional_bits;
+          // Capture the additional EOB run bits
+          if (rlesize_writer) {
+            rlesize_writer->WriteBits(additional_bits, r);
+          }
         }
         break;
       }
