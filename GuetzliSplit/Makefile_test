@@ -1,0 +1,35 @@
+CXX = g++
+CXXFLAGS = -std=c++11 -O2 -Wall -Wextra
+INCLUDES = -Iguetzli-master
+LIBS = -lm
+
+SOURCES = test_huffman_capture.cpp \
+           guetzli-master/guetzli/jpeg_data_reader.cc \
+           guetzli-master/guetzli/jpeg_data_writer.cc \
+           guetzli-master/guetzli/jpeg_huffman_decode.cc \
+           guetzli-master/guetzli/entropy_encode.cc \
+           guetzli-master/guetzli/fast_log.cc
+
+OBJECTS = $(SOURCES:.cc=.o)
+OBJECTS := $(OBJECTS:.cpp=.o)
+
+TARGET = test_huffman_capture
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+clean:
+	rm -f $(OBJECTS) $(TARGET)
+
+test: $(TARGET)
+	./$(TARGET) sample-jpeg-16x16.jpg 

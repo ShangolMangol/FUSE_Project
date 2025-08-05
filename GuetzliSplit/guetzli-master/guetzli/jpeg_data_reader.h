@@ -26,6 +26,13 @@
 
 #include "guetzli/jpeg_data.h"
 
+// Forward declarations for Huffman capture functionality
+namespace guetzli {
+struct SimpleBitWriter;
+struct DecodedDCData;
+struct DecodedACData;
+}
+
 namespace guetzli {
 
 enum JpegReadMode {
@@ -39,11 +46,17 @@ enum JpegReadMode {
 // If mode is JPEG_READ_HEADER, it fills in only the image dimensions in *jpg.
 // Returns false if the data is not valid jpeg, or if it contains an unsupported
 // jpeg feature.
+// Main function to read JPEG data
 bool ReadJpeg(const uint8_t* data, const size_t len, JpegReadMode mode,
               JPEGData* jpg);
-// string variant
 bool ReadJpeg(const std::string& data, JpegReadMode mode,
               JPEGData* jpg);
+
+// New function that reads JPEG and captures Huffman-decoded data
+bool ReadJpegWithCapture(const uint8_t* data, const size_t len, JpegReadMode mode,
+                         JPEGData* jpg, SimpleBitWriter* rlesize_writer, SimpleBitWriter* dc_raw_writer, SimpleBitWriter* ac_raw_writer);
+bool ReadJpegWithCapture(const std::string& data, JpegReadMode mode,
+                         JPEGData* jpg, SimpleBitWriter* rlesize_writer, SimpleBitWriter* dc_raw_writer, SimpleBitWriter* ac_raw_writer);
 
 }  // namespace guetzli
 

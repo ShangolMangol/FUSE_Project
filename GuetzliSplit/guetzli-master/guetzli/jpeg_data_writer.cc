@@ -572,6 +572,70 @@ void ReadACValuesFromFile(coeff_t* coeffs, SimpleBitReader* reader) {
   }
 }
 
+// Functions for capturing Huffman-decoded data during JPEG reading
+void CaptureDecodedDCData(const DecodedDCData& data, SimpleBitWriter* writer) {
+  writer->WriteBits(data.huffman_symbol, 8);  // Huffman symbol
+  writer->WriteBits(data.nbits, 8);           // Number of bits
+  if (data.nbits > 0) {
+    writer->WriteBits(data.raw_bits, data.nbits);  // Raw bits
+  }
+}
+
+void CaptureDecodedACData(const DecodedACData& data, SimpleBitWriter* writer) {
+  writer->WriteBits(data.huffman_symbol, 8);  // Huffman symbol (RLE+size)
+  writer->WriteBits(data.rle, 4);             // Run length
+  writer->WriteBits(data.size, 4);            // Size bits
+  if (data.size > 0) {
+    writer->WriteBits(data.raw_bits, data.size);  // Raw bits
+  }
+}
+
+void ReadDecodedDCData(DecodedDCData* data, SimpleBitReader* reader) {
+  data->huffman_symbol = reader->ReadBits(8);
+  data->nbits = reader->ReadBits(8);
+  if (data->nbits > 0) {
+    data->raw_bits = reader->ReadBits(data->nbits);
+  } else {
+    data->raw_bits = 0;
+  }
+}
+
+void ReadDecodedACData(DecodedACData* data, SimpleBitReader* reader) {
+  data->huffman_symbol = reader->ReadBits(8);
+  data->rle = reader->ReadBits(4);
+  data->size = reader->ReadBits(4);
+  if (data->size > 0) {
+    data->raw_bits = reader->ReadBits(data->size);
+  } else {
+    data->raw_bits = 0;
+  }
+}
+
+// Simplified functions for storing Huffman encoded (RLE,size) and raw bits
+void WriteHuffmanRleSize(int rle, int size, SimpleBitWriter* writer) {
+  writer->WriteBits(rle, 4);   // RLE (4 bits)
+  writer->WriteBits(size, 4);   // Size (4 bits)
+}
+
+void WriteRawBits(int bits, int nbits, SimpleBitWriter* writer) {
+  if (nbits > 0) {
+    writer->WriteBits(bits, nbits);
+  }
+}
+
+void ReadHuffmanRleSize(int* rle, int* size, SimpleBitReader* reader) {
+  *rle = reader->ReadBits(4);   // RLE (4 bits)
+  *size = reader->ReadBits(4);   // Size (4 bits)
+}
+
+void ReadRawBits(int* bits, int nbits, SimpleBitReader* reader) {
+  if (nbits > 0) {
+    *bits = reader->ReadBits(nbits);
+  } else {
+    *bits = 0;
+  }
+}
+
 size_t HistogramHeaderCost(const JpegHistogram& histo) {
   size_t header_bits = 17 * 8;
   for (int i = 0; i + 1 < JpegHistogram::kSize; ++i) {

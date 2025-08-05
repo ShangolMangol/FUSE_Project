@@ -129,6 +129,32 @@ void WriteACValuesToFile(const coeff_t* coeffs, SimpleBitWriter* writer);
 void ReadACNbitsFromFile(coeff_t* coeffs, SimpleBitReader* reader);
 void ReadACValuesFromFile(coeff_t* coeffs, SimpleBitReader* reader);
 
+// Structures for capturing Huffman-decoded data
+struct DecodedDCData {
+  int huffman_symbol;  // Huffman-decoded symbol
+  int raw_bits;        // Raw bits read after Huffman decoding
+  int nbits;           // Number of bits
+};
+
+struct DecodedACData {
+  int huffman_symbol;  // Huffman-decoded symbol (RLE+size)
+  int raw_bits;        // Raw bits read after Huffman decoding
+  int rle;             // Run length (extracted from symbol)
+  int size;            // Size bits (extracted from symbol)
+};
+
+// Functions for capturing Huffman-decoded data during JPEG reading
+void CaptureDecodedDCData(const DecodedDCData& data, SimpleBitWriter* writer);
+void CaptureDecodedACData(const DecodedACData& data, SimpleBitWriter* writer);
+void ReadDecodedDCData(DecodedDCData* data, SimpleBitReader* reader);
+void ReadDecodedACData(DecodedACData* data, SimpleBitReader* reader);
+
+// Simplified functions for storing Huffman encoded (RLE,size) and raw bits
+void WriteHuffmanRleSize(int rle, int size, SimpleBitWriter* writer);
+void WriteRawBits(int bits, int nbits, SimpleBitWriter* writer);
+void ReadHuffmanRleSize(int* rle, int* size, SimpleBitReader* reader);
+void ReadRawBits(int* bits, int nbits, SimpleBitReader* reader);
+
 }  // namespace guetzli
 
 #endif  // GUETZLI_JPEG_DATA_WRITER_H_

@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "guetzli/jpeg_huffman_decode.h"
+#include "guetzli/jpeg_data_writer.h"  // For SimpleBitWriter and related types
 
 namespace guetzli {
 
@@ -614,6 +615,149 @@ bool DecodeDCTBlock(const HuffmanTableEntry* dc_huff,
   return true;
 }
 
+// Simplified version that captures Huffman encoded (RLE,size) and raw bits
+bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
+                                     const HuffmanTableEntry* ac_huff,
+                                     int Ss, int Se, int Al,
+                                     int* eobrun,
+                                     BitReaderState* br,
+                                     JPEGData* jpg,
+                                     coeff_t* last_dc_coeff,
+                                     coeff_t* coeffs,
+                                     SimpleBitWriter* rlesize_writer,
+                                     SimpleBitWriter* dc_raw_writer,
+                                     SimpleBitWriter* ac_raw_writer) {
+  int s;
+  int r;
+  bool eobrun_allowed = Ss > 0;
+  
+  if (Ss == 0) {
+    // Capture DC coefficient decoding
+    s = ReadSymbol(dc_huff, br);
+    if (s >= kJpegDCAlphabetSize) {
+      fprintf(stderr, "Invalid Huffman symbol %d for DC coefficient.\n", s);
+      jpg->error = JPEG_INVALID_SYMBOL;
+      return false;
+    }
+    
+    int raw_bits = 0;
+    if (s > 0) {
+      raw_bits = br->ReadBits(s);
+      s = HuffExtend(raw_bits, s);
+    }
+    
+    // Store DC raw bits
+    if (dc_raw_writer) {
+      WriteRawBits(raw_bits, s, dc_raw_writer);
+    }
+    
+    s += *last_dc_coeff;
+    const int dc_coeff = SignedLeftshift(s, Al);
+    coeffs[0] = dc_coeff;
+    if (dc_coeff != coeffs[0]) {
+      fprintf(stderr, "Invalid DC coefficient %d\n", dc_coeff);
+      jpg->error = JPEG_NON_REPRESENTABLE_DC_COEFF;
+      return false;
+    }
+    *last_dc_coeff = s;
+    ++Ss;
+  }
+  
+  if (Ss > Se) {
+    return true;
+  }
+  if (*eobrun > 0) {
+    --(*eobrun);
+    return true;
+  }
+  
+  for (int k = Ss; k <= Se; k++) {
+    s = ReadSymbol(ac_huff, br);
+    if (s >= kJpegHuffmanAlphabetSize) {
+      fprintf(stderr, "Invalid Huffman symbol %d for AC coefficient %d\n",
+              s, k);
+      jpg->error = JPEG_INVALID_SYMBOL;
+      return false;
+    }
+    
+    r = s >> 4;
+    s &= 15;
+    
+    // Store Huffman encoded (RLE,size) and raw bits
+    if (rlesize_writer && ac_raw_writer) {
+      WriteHuffmanRleSize(r, s, rlesize_writer);
+      
+      if (s > 0) {
+        k += r;
+        if (k > Se) {
+          fprintf(stderr, "Out-of-band coefficient %d band was %d-%d\n",
+                  k, Ss, Se);
+          jpg->error = JPEG_OUT_OF_BAND_COEFF;
+          return false;
+        }
+        if (s + Al >= kJpegDCAlphabetSize) {
+          fprintf(stderr, "Out of range AC coefficient value: s=%d Al=%d k=%d\n",
+                  s, Al, k);
+          jpg->error = JPEG_NON_REPRESENTABLE_AC_COEFF;
+          return false;
+        }
+        int raw_bits = br->ReadBits(s);
+        s = HuffExtend(raw_bits, s);
+        WriteRawBits(raw_bits, s, ac_raw_writer);
+        coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
+      } else if (r == 15) {
+        k += 15;
+      } else {
+        *eobrun = 1 << r;
+        if (r > 0) {
+          if (!eobrun_allowed) {
+            fprintf(stderr, "End-of-block run crossing DC coeff.\n");
+            jpg->error = JPEG_EOB_RUN_TOO_LONG;
+            return false;
+          }
+          *eobrun += br->ReadBits(r);
+        }
+        break;
+      }
+    } else {
+      // Original decoding logic
+      if (s > 0) {
+        k += r;
+        if (k > Se) {
+          fprintf(stderr, "Out-of-band coefficient %d band was %d-%d\n",
+                  k, Ss, Se);
+          jpg->error = JPEG_OUT_OF_BAND_COEFF;
+          return false;
+        }
+        if (s + Al >= kJpegDCAlphabetSize) {
+          fprintf(stderr, "Out of range AC coefficient value: s=%d Al=%d k=%d\n",
+                  s, Al, k);
+          jpg->error = JPEG_NON_REPRESENTABLE_AC_COEFF;
+          return false;
+        }
+        r = br->ReadBits(s);
+        s = HuffExtend(r, s);
+        coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
+      } else if (r == 15) {
+        k += 15;
+      } else {
+        *eobrun = 1 << r;
+        if (r > 0) {
+          if (!eobrun_allowed) {
+            fprintf(stderr, "End-of-block run crossing DC coeff.\n");
+            jpg->error = JPEG_EOB_RUN_TOO_LONG;
+            return false;
+          }
+          *eobrun += br->ReadBits(r);
+        }
+        break;
+      }
+    }
+  }
+  --(*eobrun);
+  return true;
+}
+
 bool RefineDCTBlock(const HuffmanTableEntry* ac_huff,
                     int Ss, int Se, int Al,
                     int* eobrun,
@@ -851,8 +995,145 @@ bool ProcessScan(const uint8_t* data, const size_t len,
             int block_idx = block_y * c->width_in_blocks + block_x;
             coeff_t* coeffs = &c->coeffs[block_idx * kDCTBlockSize];
             if (Ah == 0) {
-              if (!DecodeDCTBlock(dc_lut, ac_lut, Ss, Se, Al, &eobrun, &br, jpg,
-                                  &last_dc_coeff[si->comp_idx], coeffs)) {
+              if (!DecodeDCTBlockWithSimpleCapture(dc_lut, ac_lut, Ss, Se, Al, &eobrun, &br, jpg,
+                                  &last_dc_coeff[si->comp_idx], coeffs, nullptr, nullptr, nullptr)) {
+                return false;
+              }
+            } else {
+              if (!RefineDCTBlock(ac_lut, Ss, Se, Al,
+                                  &eobrun, &br, jpg, coeffs)) {
+                return false;
+              }
+            }
+            ++block_scan_index;
+          }
+        }
+      }
+    }
+  }
+  if (eobrun > 0) {
+    fprintf(stderr, "End-of-block run too long.\n");
+    jpg->error = JPEG_EOB_RUN_TOO_LONG;
+    return false;
+  }
+  if (!br.FinishStream(pos)) {
+    jpg->error = JPEG_INVALID_SCAN;
+    return false;
+  }
+  if (*pos > len) {
+    fprintf(stderr, "Unexpected end of file during scan. pos=%d len=%d\n",
+            static_cast<int>(*pos), static_cast<int>(len));
+    jpg->error = JPEG_UNEXPECTED_EOF;
+    return false;
+  }
+  return true;
+}
+
+// Modified version of ProcessScan that captures Huffman-decoded data
+bool ProcessScanWithCapture(const uint8_t* data, const size_t len,
+                           const std::vector<HuffmanTableEntry>& dc_huff_lut,
+                           const std::vector<HuffmanTableEntry>& ac_huff_lut,
+                           uint16_t scan_progression[kMaxComponents][kDCTBlockSize],
+                           bool is_progressive,
+                           size_t* pos,
+                           JPEGData* jpg,
+                           SimpleBitWriter* rlesize_writer,
+                           SimpleBitWriter* dc_raw_writer,
+                           SimpleBitWriter* ac_raw_writer) {
+  if (!ProcessSOS(data, len, pos, jpg)) {
+    return false;
+  }
+  JPEGScanInfo* scan_info = &jpg->scan_info.back();
+  bool is_interleaved = (scan_info->components.size() > 1);
+  int MCUs_per_row;
+  int MCU_rows;
+  if (is_interleaved) {
+    MCUs_per_row = jpg->MCU_cols;
+    MCU_rows = jpg->MCU_rows;
+  } else {
+    const JPEGComponent& c = jpg->components[scan_info->components[0].comp_idx];
+    MCUs_per_row =
+        DivCeil(jpg->width * c.h_samp_factor, 8 * jpg->max_h_samp_factor);
+    MCU_rows =
+        DivCeil(jpg->height * c.v_samp_factor, 8 * jpg->max_v_samp_factor);
+  }
+  coeff_t last_dc_coeff[kMaxComponents] = {0};
+  BitReaderState br(data, len, *pos);
+  int restarts_to_go = jpg->restart_interval;
+  int next_restart_marker = 0;
+  int eobrun = -1;
+  int block_scan_index = 0;
+  const int Al = is_progressive ? scan_info->Al : 0;
+  const int Ah = is_progressive ? scan_info->Ah : 0;
+  const int Ss = is_progressive ? scan_info->Ss : 0;
+  const int Se = is_progressive ? scan_info->Se : 63;
+  const uint16_t scan_bitmask = Ah == 0 ? (0xffff << Al) : (1u << Al);
+  const uint16_t refinement_bitmask = (1 << Al) - 1;
+  for (size_t i = 0; i < scan_info->components.size(); ++i) {
+    int comp_idx = scan_info->components[i].comp_idx;
+    for (int k = Ss; k <= Se; ++k) {
+      if (scan_progression[comp_idx][k] & scan_bitmask) {
+        fprintf(stderr, "Overlapping scans: component=%d k=%d prev_mask=%d "
+                "cur_mask=%d\n", comp_idx, k, scan_progression[i][k],
+                scan_bitmask);
+        jpg->error = JPEG_OVERLAPPING_SCANS;
+        return false;
+      }
+      if (scan_progression[comp_idx][k] & refinement_bitmask) {
+        fprintf(stderr, "Invalid scan order, a more refined scan was already "
+                "done: component=%d k=%d prev_mask=%d cur_mask=%d\n", comp_idx,
+                k, scan_progression[i][k], scan_bitmask);
+        jpg->error = JPEG_INVALID_SCAN_ORDER;
+        return false;
+      }
+      scan_progression[comp_idx][k] |= scan_bitmask;
+    }
+  }
+  if (Al > 10) {
+    fprintf(stderr, "Scan parameter Al=%d is not supported in guetzli.\n", Al);
+    jpg->error = JPEG_NON_REPRESENTABLE_AC_COEFF;
+    return false;
+  }
+  for (int mcu_y = 0; mcu_y < MCU_rows; ++mcu_y) {
+    for (int mcu_x = 0; mcu_x < MCUs_per_row; ++mcu_x) {
+      // Handle the restart intervals.
+      if (jpg->restart_interval > 0) {
+        if (restarts_to_go == 0) {
+          if (ProcessRestart(data, len,
+                             &next_restart_marker, &br, jpg)) {
+            restarts_to_go = jpg->restart_interval;
+            memset(last_dc_coeff, 0, sizeof(last_dc_coeff));
+            if (eobrun > 0) {
+              fprintf(stderr, "End-of-block run too long.\n");
+              jpg->error = JPEG_EOB_RUN_TOO_LONG;
+              return false;
+            }
+            eobrun = -1;   // fresh start
+          } else {
+            return false;
+          }
+        }
+        --restarts_to_go;
+      }
+      // Decode one MCU.
+      for (size_t i = 0; i < scan_info->components.size(); ++i) {
+        JPEGComponentScanInfo* si = &scan_info->components[i];
+        JPEGComponent* c = &jpg->components[si->comp_idx];
+        const HuffmanTableEntry* dc_lut =
+            &dc_huff_lut[si->dc_tbl_idx * kJpegHuffmanLutSize];
+        const HuffmanTableEntry* ac_lut =
+            &ac_huff_lut[si->ac_tbl_idx * kJpegHuffmanLutSize];
+        int nblocks_y = is_interleaved ? c->v_samp_factor : 1;
+        int nblocks_x = is_interleaved ? c->h_samp_factor : 1;
+        for (int iy = 0; iy < nblocks_y; ++iy) {
+          for (int ix = 0; ix < nblocks_x; ++ix) {
+            int block_y = mcu_y * nblocks_y + iy;
+            int block_x = mcu_x * nblocks_x + ix;
+            int block_idx = block_y * c->width_in_blocks + block_x;
+            coeff_t* coeffs = &c->coeffs[block_idx * kDCTBlockSize];
+            if (Ah == 0) {
+              if (!DecodeDCTBlockWithSimpleCapture(dc_lut, ac_lut, Ss, Se, Al, &eobrun, &br, jpg,
+                                  &last_dc_coeff[si->comp_idx], coeffs, rlesize_writer, dc_raw_writer, ac_raw_writer)) {
                 return false;
               }
             } else {
@@ -1076,6 +1357,158 @@ bool ReadJpeg(const std::string& data, JpegReadMode mode,
   return ReadJpeg(reinterpret_cast<const uint8_t*>(data.data()),
                   static_cast<const size_t>(data.size()),
                   mode, jpg);
+}
+
+// New function that reads JPEG and captures Huffman-decoded data
+bool ReadJpegWithCapture(const uint8_t* data, const size_t len, JpegReadMode mode,
+                         JPEGData* jpg, SimpleBitWriter* rlesize_writer, SimpleBitWriter* dc_raw_writer, SimpleBitWriter* ac_raw_writer) {
+  size_t pos = 0;
+  // Check SOI marker.
+  EXPECT_MARKER();
+  int marker = data[pos + 1];
+  pos += 2;
+  if (marker != 0xd8) {
+    fprintf(stderr, "Did not find expected SOI marker, actual=%d\n", marker);
+    jpg->error = JPEG_SOI_NOT_FOUND;
+    return false;
+  }
+  int lut_size = kMaxHuffmanTables * kJpegHuffmanLutSize;
+  std::vector<HuffmanTableEntry> dc_huff_lut(lut_size);
+  std::vector<HuffmanTableEntry> ac_huff_lut(lut_size);
+  bool found_sof = false;
+  uint16_t scan_progression[kMaxComponents][kDCTBlockSize] = { { 0 } };
+
+  bool is_progressive = false;   // default
+  do {
+    // Read next marker.
+    size_t num_skipped = FindNextMarker(data, len, pos);
+    if (num_skipped > 0) {
+      // Add a fake marker to indicate arbitrary in-between-markers data.
+      jpg->marker_order.push_back(0xff);
+      jpg->inter_marker_data.push_back(
+          std::string(reinterpret_cast<const char*>(&data[pos]),
+                                      num_skipped));
+      pos += num_skipped;
+    }
+    EXPECT_MARKER();
+    marker = data[pos + 1];
+    pos += 2;
+    bool ok = true;
+    switch (marker) {
+      case 0xc0:
+      case 0xc1:
+      case 0xc2:
+        is_progressive = (marker == 0xc2);
+        ok = ProcessSOF(data, len, mode, &pos, jpg);
+        found_sof = true;
+        break;
+      case 0xc4:
+        ok = ProcessDHT(data, len, mode, &dc_huff_lut, &ac_huff_lut, &pos, jpg);
+        break;
+      case 0xd0:
+      case 0xd1:
+      case 0xd2:
+      case 0xd3:
+      case 0xd4:
+      case 0xd5:
+      case 0xd6:
+      case 0xd7:
+        // RST markers do not have any data.
+        break;
+      case 0xd9:
+        // Found end marker.
+        break;
+      case 0xda:
+        if (mode == JPEG_READ_ALL) {
+          ok = ProcessScanWithCapture(data, len, dc_huff_lut, ac_huff_lut,
+                                     scan_progression, is_progressive, &pos, jpg,
+                                     rlesize_writer, dc_raw_writer, ac_raw_writer);
+        }
+        break;
+      case 0xdb:
+        ok = ProcessDQT(data, len, &pos, jpg);
+        break;
+      case 0xdd:
+        ok = ProcessDRI(data, len, &pos, jpg);
+        break;
+      case 0xe0:
+      case 0xe1:
+      case 0xe2:
+      case 0xe3:
+      case 0xe4:
+      case 0xe5:
+      case 0xe6:
+      case 0xe7:
+      case 0xe8:
+      case 0xe9:
+      case 0xea:
+      case 0xeb:
+      case 0xec:
+      case 0xed:
+      case 0xee:
+      case 0xef:
+        if (mode != JPEG_READ_TABLES) {
+          ok = ProcessAPP(data, len, &pos, jpg);
+        }
+        break;
+      case 0xfe:
+        if (mode != JPEG_READ_TABLES) {
+          ok = ProcessCOM(data, len, &pos, jpg);
+        }
+        break;
+      default:
+        fprintf(stderr, "Unsupported marker: %d pos=%d len=%d\n",
+                marker, static_cast<int>(pos), static_cast<int>(len));
+        jpg->error = JPEG_UNSUPPORTED_MARKER;
+        ok = false;
+        break;
+    }
+    if (!ok) {
+      return false;
+    }
+    jpg->marker_order.push_back(marker);
+    if (mode == JPEG_READ_HEADER && found_sof) {
+      break;
+    }
+  } while (marker != 0xd9);
+
+  if (!found_sof) {
+    fprintf(stderr, "Missing SOF marker.\n");
+    jpg->error = JPEG_SOF_NOT_FOUND;
+    return false;
+  }
+
+  // Supplemental checks.
+  if (mode == JPEG_READ_ALL) {
+    if (pos < len) {
+      jpg->tail_data.assign(reinterpret_cast<const char*>(&data[pos]),
+                            len - pos);
+    }
+    if (!FixupIndexes(jpg)) {
+      return false;
+    }
+    if (jpg->huffman_code.size() == 0) {
+      // Section B.2.4.2: "If a table has never been defined for a particular
+      // destination, then when this destination is specified in a scan header,
+      // the results are unpredictable."
+      fprintf(stderr, "Need at least one Huffman code table.\n");
+      jpg->error = JPEG_HUFFMAN_TABLE_ERROR;
+      return false;
+    }
+    if (jpg->huffman_code.size() >= kMaxDHTMarkers) {
+      fprintf(stderr, "Too many Huffman tables.\n");
+      jpg->error = JPEG_HUFFMAN_TABLE_ERROR;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ReadJpegWithCapture(const std::string& data, JpegReadMode mode,
+                         JPEGData* jpg, SimpleBitWriter* rlesize_writer, SimpleBitWriter* dc_raw_writer, SimpleBitWriter* ac_raw_writer) {
+  return ReadJpegWithCapture(reinterpret_cast<const uint8_t*>(data.data()),
+                             static_cast<const size_t>(data.size()),
+                             mode, jpg, rlesize_writer, dc_raw_writer, ac_raw_writer);
 }
 
 }  // namespace guetzli
