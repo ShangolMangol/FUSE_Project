@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <algorithm> // For std::remove
 
 // String output function for JPEGOutput
 int StringOut(void* data, const uint8_t* buf, size_t len) {
@@ -72,13 +73,14 @@ bool MergeSplitFiles(const std::string& base_name) {
   // Parse the headers to get JPEG structure
   guetzli::JPEGData jpg;
   
-  // Debug: Print first few bytes of headers file
   std::cout << "Headers file first 16 bytes: ";
   for (int i = 0; i < std::min(16, (int)headers_data.size()); ++i) {
     printf("%02x ", (unsigned char)headers_data[i]);
   }
   std::cout << std::endl;
   
+  // Read with JPEG_READ_ALL. Because our new headers file has no scan data,
+  // this will parse all metadata and correctly allocate the coefficient buffers.
   if (!guetzli::ReadJpeg(headers_data, guetzli::JPEG_READ_ALL, &jpg)) {
     std::cerr << "Failed to parse headers file" << std::endl;
     std::cerr << "Headers file size: " << headers_data.size() << " bytes" << std::endl;
@@ -93,113 +95,84 @@ bool MergeSplitFiles(const std::string& base_name) {
   guetzli::SimpleBitReader dc_reader(dc_data.data(), dc_data.size());
   guetzli::SimpleBitReader ac_reader(ac_data.data(), ac_data.size());
 
-  // Reconstruct the coefficients from the split data
-  // The split process writes raw bits and RLE+size information from Huffman decoding
-  
-  guetzli::coeff_t last_dc_coeff[3] = {0}; // Assuming max 3 components
+  guetzli::coeff_t last_dc_coeff[3] = {0};
   
   std::cout << "Reconstructing coefficients..." << std::endl;
   
   for (size_t comp_idx = 0; comp_idx < jpg.components.size(); comp_idx++) {
     auto& comp = jpg.components[comp_idx];
-    std::cout << "Processing component " << comp_idx << " with " << comp.coeffs.size() << " coefficients" << std::endl;
     
-    for (size_t i = 0; i < comp.coeffs.size(); i += 64) { // 64 coefficients per block
+    for (size_t i = 0; i < comp.coeffs.size(); i += 64) {
       guetzli::coeff_t* block_coeffs = &comp.coeffs[i];
       
-      // Read DC coefficient data - the split process writes Huffman symbol and raw bits
-      int dc_huffman_symbol = dc_reader.ReadBits(8); // Read DC Huffman symbol (size category)
+      int dc_huffman_symbol = dc_reader.ReadBits(8);
       int dc_raw_bits = 0;
       if (dc_huffman_symbol > 0) {
-        dc_raw_bits = dc_reader.ReadBits(dc_huffman_symbol); // Read exactly SIZE bits for the raw bits
+        dc_raw_bits = dc_reader.ReadBits(dc_huffman_symbol);
       }
       
+      int dc_diff = 0;
       if (dc_huffman_symbol > 0) {
-        // Reconstruct DC coefficient using the raw bits
-        // Apply HuffExtend logic: (x < (1 << (s - 1)) ? x - (1 << s) + 1 : x)
-        int dc_diff = dc_raw_bits;
+        dc_diff = dc_raw_bits;
         if (dc_diff < (1 << (dc_huffman_symbol - 1))) {
           dc_diff -= (1 << dc_huffman_symbol) - 1;
         }
-        block_coeffs[0] = last_dc_coeff[comp_idx] + dc_diff;
-        last_dc_coeff[comp_idx] = block_coeffs[0];
-      } else {
-        block_coeffs[0] = last_dc_coeff[comp_idx];
+      }
+      block_coeffs[0] = last_dc_coeff[comp_idx] + dc_diff;
+      last_dc_coeff[comp_idx] = block_coeffs[0];
+
+      // Zero out AC coefficients before filling them
+      for (int k = 1; k < 64; ++k) {
+        block_coeffs[k] = 0;
       }
 
-      // Read AC coefficients using Huffman symbol data from rlesize file
-      int k = 1; // Start from first AC coefficient
-      int eobrun = 0; // Track end-of-block runs
-      
+      int k = 1;
+      // Correctly handle eobrun. It is not a boolean flag.
+      int eobrun = 0;
       while (k < 64) {
-        // Handle EOB runs
         if (eobrun > 0) {
-          eobrun--;
-          break; // End of block
+            eobrun--;
+            // This EOB run applies to the rest of the MCU blocks for this component.
+            // We break here to start the next 8x8 block.
+            break;
         }
-        
-        int ac_huffman_symbol = rlesize_reader.ReadBits(8); // Read AC Huffman symbol (RLE+size)
+
+        int ac_huffman_symbol = rlesize_reader.ReadBits(8);
         int rle = ac_huffman_symbol >> 4;
         int size = ac_huffman_symbol & 15;
         
-        // Debug: Print symbol information
-        if (size == 0 && rle != 15) {
-          std::cout << "  EOB symbol: RLE=" << rle << ", Size=" << size << ", k=" << k << std::endl;
-        }
-        
         if (size > 0) {
-          // Skip zeros based on RLE
           k += rle;
+          if (k >= 64) break;
           
-          if (k >= 64) break; // End of block
-          
-          int ac_raw_bits = ac_reader.ReadBits(size); // Read size bits for AC coefficient
-          // Reconstruct AC coefficient using raw bits
-          // Apply HuffExtend logic: (x < (1 << (s - 1)) ? x - (1 << s) + 1 : x)
+          int ac_raw_bits = ac_reader.ReadBits(size);
           int ac_val = ac_raw_bits;
           if (ac_val < (1 << (size - 1))) {
             ac_val -= (1 << size) - 1;
           }
-          // Apply SignedLeftshift: (v >= 0) ? (v << Al) : -((-v) << Al)
-          // Note: Al is 0 for baseline JPEG, so this is just a cast
-          block_coeffs[k] = static_cast<guetzli::coeff_t>(ac_val);
+          block_coeffs[guetzli::kJPEGNaturalOrder[k]] = static_cast<guetzli::coeff_t>(ac_val);
           k++;
-        } else if (rle == 15) {
-          // 16 zeros, skip 15 and continue to next coefficient
-          k += 15;
-        } else {
-          // End of block reached - set up EOB run
-          // Check if EOB run is allowed (k > 1 means we're past DC coefficient)
-          bool eobrun_allowed = (k > 1);
-          if (rle > 0 && !eobrun_allowed) {
-            std::cerr << "End-of-block run crossing DC coeff." << std::endl;
-            return false;
-          }
+        } else if (rle == 15) { // ZRL (16 zeros)
+          k += 16;
+        } else { // EOB
           eobrun = 1 << rle;
           if (rle > 0) {
-            // Read additional EOB run bits from rlesize file (they were captured there)
             int additional_bits = rlesize_reader.ReadBits(rle);
             eobrun += additional_bits;
           }
+          // Decrement for the current block and break
+          eobrun--;
           break;
         }
-      }
-      
-      // Fill remaining coefficients with zeros
-      while (k < 64) {
-        block_coeffs[k] = 0;
-        k++;
       }
     }
   }
 
   std::cout << "Writing reconstructed JPEG..." << std::endl;
 
-  // Write the reconstructed JPEG
   std::string output_data;
   guetzli::JPEGOutput output(StringOut, &output_data);
   
-  // Clear any error state that might have been set during reconstruction
   jpg.error = guetzli::JPEG_OK;
   
   if (!guetzli::WriteJpeg(jpg, false, output, nullptr)) {
@@ -207,7 +180,6 @@ bool MergeSplitFiles(const std::string& base_name) {
     return false;
   }
 
-  // Write the output file
   std::ofstream output_file(output_path, std::ios::binary);
   if (!output_file) {
     std::cerr << "Failed to open output file for writing: " << output_path << std::endl;
@@ -224,7 +196,6 @@ bool MergeSplitFiles(const std::string& base_name) {
 bool TestSplitAndMerge(const std::string& input_file) {
   std::cout << "Testing split and merge with file: " << input_file << std::endl;
   
-  // First, split the file
   std::string base_name = input_file;
   size_t dot_pos = base_name.find_last_of('.');
   if (dot_pos != std::string::npos) {
@@ -237,7 +208,6 @@ bool TestSplitAndMerge(const std::string& input_file) {
   std::string ac_path = base_name + ".jpg.ac";
   std::string merged_path = base_name + "_merged.jpg";
   
-  // Read the input JPEG file
   std::ifstream file(input_file, std::ios::binary);
   if (!file) {
     std::cerr << "Failed to open input file: " << input_file << std::endl;
@@ -248,28 +218,34 @@ bool TestSplitAndMerge(const std::string& input_file) {
                          std::istreambuf_iterator<char>());
   file.close();
 
-  // Create writers for capturing Huffman-decoded data
   guetzli::SimpleBitWriter rlesize_writer;
   guetzli::SimpleBitWriter dc_raw_writer;
   guetzli::SimpleBitWriter ac_raw_writer;
 
-  // Read JPEG with capture
   guetzli::JPEGData jpg;
   if (!guetzli::ReadJpegWithCapture(jpeg_data, guetzli::JPEG_READ_ALL, &jpg, &rlesize_writer, &dc_raw_writer, &ac_raw_writer)) {
     std::cerr << "Failed to read JPEG file with capture" << std::endl;
     return false;
   }
 
-  // Write headers file (JPEG headers without scan data)
+  // Create a header-only JPEGData object by removing scan-related info.
   std::string headers_data;
   guetzli::JPEGOutput headers_output(StringOut, &headers_data);
   
-  // Create a copy of the JPEG data with zeroed coefficients for headers
   guetzli::JPEGData headers_jpg = jpg;
+  // Clear all scan-related information. This prevents WriteJpeg from writing a scan.
+  headers_jpg.scan_info.clear();
+  headers_jpg.marker_order.erase(
+      std::remove(headers_jpg.marker_order.begin(), headers_jpg.marker_order.end(), 0xda), // remove SOS
+      headers_jpg.marker_order.end());
+  // Let WriteJpeg add its own EOI
+  headers_jpg.marker_order.erase(
+      std::remove(headers_jpg.marker_order.begin(), headers_jpg.marker_order.end(), 0xd9), // remove EOI
+      headers_jpg.marker_order.end());
+  
+  // Coefficients are not needed for the header file.
   for (auto& comp : headers_jpg.components) {
-    for (size_t i = 0; i < comp.coeffs.size(); ++i) {
-      comp.coeffs[i] = 0;
-    }
+    comp.coeffs.clear();
   }
   
   if (!guetzli::WriteJpeg(headers_jpg, false, headers_output, nullptr)) {
@@ -277,7 +253,6 @@ bool TestSplitAndMerge(const std::string& input_file) {
     return false;
   }
 
-  // Debug: Print first few bytes of headers data
   std::cout << "Headers data first 16 bytes: ";
   for (int i = 0; i < std::min(16, (int)headers_data.size()); ++i) {
     printf("%02x ", (unsigned char)headers_data[i]);
@@ -285,7 +260,6 @@ bool TestSplitAndMerge(const std::string& input_file) {
   std::cout << std::endl;
   std::cout << "Headers data size: " << headers_data.size() << " bytes" << std::endl;
 
-  // Write the split files
   FILE* headers_f = fopen(headers_path.c_str(), "wb");
   if (!headers_f) {
     std::cerr << "Failed to open headers file for writing: " << headers_path << std::endl;
@@ -324,7 +298,6 @@ bool TestSplitAndMerge(const std::string& input_file) {
   std::cout << "  DC raw bits: " << dc_path << std::endl;
   std::cout << "  AC raw bits: " << ac_path << std::endl;
 
-  // Now merge the files back
   if (!MergeSplitFiles(base_name)) {
     std::cerr << "Failed to merge split files" << std::endl;
     return false;
@@ -430,20 +403,24 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // The original ReadJpegWithCapture wrote the Huffman-decoded data
-  // but we need to ensure we have the complete information for reconstruction
-  // The capture process already wrote the raw bits and RLE+size information
-
-  // Write headers file (JPEG headers without scan data)
+  // Create a header-only JPEGData object by removing scan-related info.
   std::string headers_data;
   guetzli::JPEGOutput headers_output(StringOut, &headers_data);
   
-  // Create a copy of the JPEG data with zeroed coefficients for headers
   guetzli::JPEGData headers_jpg = jpg;
+  // Clear all scan-related information. This prevents WriteJpeg from writing a scan.
+  headers_jpg.scan_info.clear();
+  headers_jpg.marker_order.erase(
+      std::remove(headers_jpg.marker_order.begin(), headers_jpg.marker_order.end(), 0xda), // remove SOS
+      headers_jpg.marker_order.end());
+  // Let WriteJpeg add its own EOI
+  headers_jpg.marker_order.erase(
+      std::remove(headers_jpg.marker_order.begin(), headers_jpg.marker_order.end(), 0xd9), // remove EOI
+      headers_jpg.marker_order.end());
+  
+  // Coefficients are not needed for the header file.
   for (auto& comp : headers_jpg.components) {
-    for (size_t i = 0; i < comp.coeffs.size(); ++i) {
-      comp.coeffs[i] = 0;
-    }
+    comp.coeffs.clear();
   }
   
   if (!guetzli::WriteJpeg(headers_jpg, false, headers_output, nullptr)) {

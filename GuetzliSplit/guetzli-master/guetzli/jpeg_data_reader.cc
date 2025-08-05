@@ -83,6 +83,13 @@ inline int ReadUint16(const uint8_t* data, size_t* pos) {
   return v;
 }
 
+// Helper to write raw bits to a bit writer.
+void WriteRawBits(int bits, int nbits, SimpleBitWriter* writer) {
+  if (writer && nbits > 0) {
+    writer->WriteBits(bits, nbits);
+  }
+}
+
 // Reads the Start of Frame (SOF) marker segment and fills in *jpg with the
 // parsed data.
 bool ProcessSOF(const uint8_t* data, const size_t len,
@@ -627,12 +634,10 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
                                      SimpleBitWriter* rlesize_writer,
                                      SimpleBitWriter* dc_raw_writer,
                                      SimpleBitWriter* ac_raw_writer) {
-  int s;
-  int r;
+  int s, r;
   bool eobrun_allowed = Ss > 0;
-  
+
   if (Ss == 0) {
-    // Capture DC coefficient decoding
     s = ReadSymbol(dc_huff, br);
     if (s >= kJpegDCAlphabetSize) {
       fprintf(stderr, "Invalid Huffman symbol %d for DC coefficient.\n", s);
@@ -641,20 +646,16 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
     }
     
     int raw_bits = 0;
-    int original_size = s;  // Store the original size category
+    int original_size = s;
     if (s > 0) {
       raw_bits = br->ReadBits(s);
       s = HuffExtend(raw_bits, s);
     }
-    
-    // Store DC Huffman symbol and raw bits
+
+    // Capture DC Huffman symbol (size) and the raw bits
     if (dc_raw_writer) {
-      // Write the original Huffman symbol (which contains the size)
-      dc_raw_writer->WriteBits(original_size, 8); // DC Huffman symbol (size category)
-      // Write the raw bits using exactly the size bits
-      if (original_size > 0) {
-        WriteRawBits(raw_bits, original_size, dc_raw_writer);
-      }
+      dc_raw_writer->WriteBits(original_size, 8);
+      WriteRawBits(raw_bits, original_size, dc_raw_writer);
     }
     
     s += *last_dc_coeff;
@@ -666,113 +667,72 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
       return false;
     }
     *last_dc_coeff = s;
-    ++Ss;
+    Ss++;
   }
   
-  if (Ss > Se) {
-    return true;
-  }
+  if (Ss > Se) return true;
   if (*eobrun > 0) {
-    --(*eobrun);
+    (*eobrun)--;
     return true;
   }
   
-  for (int k = Ss; k <= Se; k++) {
-    s = ReadSymbol(ac_huff, br);
-    if (s >= kJpegHuffmanAlphabetSize) {
+  // Streamlined AC coefficient capture logic.
+  for (int k = Ss; k <= Se; ) {
+    int huff_symbol = ReadSymbol(ac_huff, br);
+    if (huff_symbol >= kJpegHuffmanAlphabetSize) {
       fprintf(stderr, "Invalid Huffman symbol %d for AC coefficient %d\n",
-              s, k);
+              huff_symbol, k);
       jpg->error = JPEG_INVALID_SYMBOL;
       return false;
     }
+
+    // Capture the RLE+size symbol for all AC cases.
+    if (rlesize_writer) {
+      rlesize_writer->WriteBits(huff_symbol, 8);
+    }
+
+    r = huff_symbol >> 4;
+    s = huff_symbol & 15;
     
-    // Store the original Huffman symbol (which contains RLE and size)
-    if (rlesize_writer && ac_raw_writer) {
-      // Write the original Huffman symbol (which contains both RLE and size)
-      rlesize_writer->WriteBits(s, 8); // AC Huffman symbol (RLE+size)
-      
-      r = s >> 4;
-      s &= 15;
-      
-      if (s > 0) {
-        k += r;
-        if (k > Se) {
-          fprintf(stderr, "Out-of-band coefficient %d band was %d-%d\n",
-                  k, Ss, Se);
-          jpg->error = JPEG_OUT_OF_BAND_COEFF;
-          return false;
-        }
-        if (s + Al >= kJpegDCAlphabetSize) {
-          fprintf(stderr, "Out of range AC coefficient value: s=%d Al=%d k=%d\n",
-                  s, Al, k);
-          jpg->error = JPEG_NON_REPRESENTABLE_AC_COEFF;
-          return false;
-        }
-        int raw_bits = br->ReadBits(s);
-        int original_ac_size = s;  // Store the original size before HuffExtend
-        s = HuffExtend(raw_bits, s);
-        WriteRawBits(raw_bits, original_ac_size, ac_raw_writer);
-        coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
-      } else if (r == 15) {
-        k += 15;
-      } else {
-        *eobrun = 1 << r;
-        if (r > 0) {
-          if (!eobrun_allowed) {
-            fprintf(stderr, "End-of-block run crossing DC coeff.\n");
-            jpg->error = JPEG_EOB_RUN_TOO_LONG;
-            return false;
-          }
-          int additional_bits = br->ReadBits(r);
-          *eobrun += additional_bits;
-          // Capture the additional EOB run bits
-          if (rlesize_writer) {
-            rlesize_writer->WriteBits(additional_bits, r);
-          }
-        }
-        break;
+    if (s > 0) { // Regular AC coefficient
+      k += r;
+      if (k > Se) {
+        fprintf(stderr, "Out-of-band coefficient %d band was %d-%d\n",
+                k, Ss, Se);
+        jpg->error = JPEG_OUT_OF_BAND_COEFF;
+        return false;
       }
-    } else {
-      // Original decoding logic
-      if (s > 0) {
-        k += r;
-        if (k > Se) {
-          fprintf(stderr, "Out-of-band coefficient %d band was %d-%d\n",
-                  k, Ss, Se);
-          jpg->error = JPEG_OUT_OF_BAND_COEFF;
-          return false;
-        }
-        if (s + Al >= kJpegDCAlphabetSize) {
-          fprintf(stderr, "Out of range AC coefficient value: s=%d Al=%d k=%d\n",
-                  s, Al, k);
-          jpg->error = JPEG_NON_REPRESENTABLE_AC_COEFF;
-          return false;
-        }
-        r = br->ReadBits(s);
-        s = HuffExtend(r, s);
-        coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
-      } else if (r == 15) {
-        k += 15;
-      } else {
-        *eobrun = 1 << r;
-        if (r > 0) {
-          if (!eobrun_allowed) {
-            fprintf(stderr, "End-of-block run crossing DC coeff.\n");
-            jpg->error = JPEG_EOB_RUN_TOO_LONG;
-            return false;
-          }
-          int additional_bits = br->ReadBits(r);
-          *eobrun += additional_bits;
-          // Capture the additional EOB run bits
-          if (rlesize_writer) {
-            rlesize_writer->WriteBits(additional_bits, r);
-          }
-        }
-        break;
+
+      int raw_bits = br->ReadBits(s);
+      int val = HuffExtend(raw_bits, s);
+      coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(val, Al);
+      
+      // Capture the raw bits for the AC coefficient.
+      if (ac_raw_writer) {
+        WriteRawBits(raw_bits, s, ac_raw_writer);
       }
+      k++;
+    } else if (r == 15) { // ZRL (16 zero run)
+      k += 16;
+    } else { // EOB (End of Block)
+      *eobrun = 1 << r;
+      if (r > 0) {
+        if (!eobrun_allowed) {
+          fprintf(stderr, "End-of-block run crossing DC coeff.\n");
+          jpg->error = JPEG_EOB_RUN_TOO_LONG;
+          return false;
+        }
+        int additional_bits = br->ReadBits(r);
+        *eobrun += additional_bits;
+        // Capture the additional bits for the EOB run.
+        if (rlesize_writer) {
+          rlesize_writer->WriteBits(additional_bits, r);
+        }
+      }
+      break; // Exit the loop for this block.
     }
   }
-  --(*eobrun);
+  (*eobrun)--;
   return true;
 }
 
