@@ -70,8 +70,17 @@ bool MergeSplitFiles(const std::string& base_name) {
 
   // Parse the headers to get JPEG structure
   guetzli::JPEGData jpg;
+  
+  // Debug: Print first few bytes of headers file
+  std::cout << "Headers file first 16 bytes: ";
+  for (int i = 0; i < std::min(16, (int)headers_data.size()); ++i) {
+    printf("%02x ", (unsigned char)headers_data[i]);
+  }
+  std::cout << std::endl;
+  
   if (!guetzli::ReadJpeg(headers_data, guetzli::JPEG_READ_ALL, &jpg)) {
     std::cerr << "Failed to parse headers file" << std::endl;
+    std::cerr << "Headers file size: " << headers_data.size() << " bytes" << std::endl;
     return false;
   }
   std::cout << "Parsed JPEG headers successfully" << std::endl;
@@ -119,7 +128,15 @@ bool MergeSplitFiles(const std::string& base_name) {
 
       // Read AC coefficients using Huffman symbol data from rlesize file
       int k = 1; // Start from first AC coefficient
+      int eobrun = 0; // Track end-of-block runs
+      
       while (k < 64) {
+        // Handle EOB runs
+        if (eobrun > 0) {
+          eobrun--;
+          break; // End of block
+        }
+        
         int ac_huffman_symbol = rlesize_reader.ReadBits(8); // Read AC Huffman symbol (RLE+size)
         int rle = ac_huffman_symbol >> 4;
         int size = ac_huffman_symbol & 15;
@@ -145,7 +162,13 @@ bool MergeSplitFiles(const std::string& base_name) {
           // 16 zeros, skip 15 and continue to next coefficient
           k += 15;
         } else {
-          // End of block reached
+          // End of block reached - set up EOB run
+          eobrun = 1 << rle;
+          if (rle > 0) {
+            // Read additional EOB run bits
+            int additional_bits = rlesize_reader.ReadBits(rle);
+            eobrun += additional_bits;
+          }
           break;
         }
       }
@@ -238,6 +261,14 @@ bool TestSplitAndMerge(const std::string& input_file) {
     std::cerr << "Failed to write headers file" << std::endl;
     return false;
   }
+
+  // Debug: Print first few bytes of headers data
+  std::cout << "Headers data first 16 bytes: ";
+  for (int i = 0; i < std::min(16, (int)headers_data.size()); ++i) {
+    printf("%02x ", (unsigned char)headers_data[i]);
+  }
+  std::cout << std::endl;
+  std::cout << "Headers data size: " << headers_data.size() << " bytes" << std::endl;
 
   // Write the split files
   FILE* headers_f = fopen(headers_path.c_str(), "wb");
@@ -404,6 +435,14 @@ int main(int argc, char* argv[]) {
     std::cerr << "Failed to write headers file" << std::endl;
     return 1;
   }
+
+  // Debug: Print first few bytes of headers data
+  std::cout << "Headers data first 16 bytes: ";
+  for (int i = 0; i < std::min(16, (int)headers_data.size()); ++i) {
+    printf("%02x ", (unsigned char)headers_data[i]);
+  }
+  std::cout << std::endl;
+  std::cout << "Headers data size: " << headers_data.size() << " bytes" << std::endl;
 
   // Write the files
   FILE* headers_f = fopen(headers_path.c_str(), "wb");
