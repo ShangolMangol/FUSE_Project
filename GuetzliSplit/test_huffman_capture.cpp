@@ -144,7 +144,7 @@ bool MergeSplitFiles(const std::string& base_name) {
         
         // Debug: Print symbol information
         if (size == 0 && rle != 15) {
-          std::cout << "  EOB symbol: RLE=" << rle << ", Size=" << size << std::endl;
+          std::cout << "  EOB symbol: RLE=" << rle << ", Size=" << size << ", k=" << k << std::endl;
         }
         
         if (size > 0) {
@@ -169,6 +169,12 @@ bool MergeSplitFiles(const std::string& base_name) {
           k += 15;
         } else {
           // End of block reached - set up EOB run
+          // Check if EOB run is allowed (k > 1 means we're past DC coefficient)
+          bool eobrun_allowed = (k > 1);
+          if (rle > 0 && !eobrun_allowed) {
+            std::cerr << "End-of-block run crossing DC coeff." << std::endl;
+            return false;
+          }
           eobrun = 1 << rle;
           if (rle > 0) {
             // Read additional EOB run bits from rlesize file (they were captured there)
