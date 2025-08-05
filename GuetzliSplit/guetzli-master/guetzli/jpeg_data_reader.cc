@@ -84,11 +84,7 @@ inline int ReadUint16(const uint8_t* data, size_t* pos) {
 }
 
 // Helper to write raw bits to a bit writer.
-void WriteRawBits(int bits, int nbits, SimpleBitWriter* writer) {
-  if (writer && nbits > 0) {
-    writer->WriteBits(bits, nbits);
-  }
-}
+// Note: WriteRawBits is defined in jpeg_data_writer.h
 
 // Reads the Start of Frame (SOF) marker segment and fills in *jpg with the
 // parsed data.
