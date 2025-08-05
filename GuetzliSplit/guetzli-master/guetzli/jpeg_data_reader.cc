@@ -647,11 +647,14 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
       s = HuffExtend(raw_bits, s);
     }
     
-    // Store DC raw bits and number of bits
+    // Store DC Huffman symbol and raw bits
     if (dc_raw_writer) {
-      WriteRawBits(raw_bits, original_size, dc_raw_writer);
-      // Also write the number of bits for reconstruction (4 bits sufficient for DC size category 0-11)
-      dc_raw_writer->WriteBits(original_size, 4); // Write 4 bits for the number of bits
+      // Write the original Huffman symbol (which contains the size)
+      dc_raw_writer->WriteBits(original_size, 8); // DC Huffman symbol (size category)
+      // Write the raw bits using exactly the size bits
+      if (original_size > 0) {
+        WriteRawBits(raw_bits, original_size, dc_raw_writer);
+      }
     }
     
     s += *last_dc_coeff;
@@ -683,12 +686,13 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
       return false;
     }
     
-    r = s >> 4;
-    s &= 15;
-    
-    // Store Huffman encoded (RLE,size) and raw bits
+    // Store the original Huffman symbol (which contains RLE and size)
     if (rlesize_writer && ac_raw_writer) {
-      WriteHuffmanRleSize(r, s, rlesize_writer);
+      // Write the original Huffman symbol (which contains both RLE and size)
+      rlesize_writer->WriteBits(s, 8); // AC Huffman symbol (RLE+size)
+      
+      r = s >> 4;
+      s &= 15;
       
       if (s > 0) {
         k += r;
@@ -705,8 +709,9 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
           return false;
         }
         int raw_bits = br->ReadBits(s);
+        int original_ac_size = s;  // Store the original size before HuffExtend
         s = HuffExtend(raw_bits, s);
-        WriteRawBits(raw_bits, s, ac_raw_writer);
+        WriteRawBits(raw_bits, original_ac_size, ac_raw_writer);
         coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
       } else if (r == 15) {
         k += 15;

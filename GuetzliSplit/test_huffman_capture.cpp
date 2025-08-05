@@ -80,30 +80,31 @@ bool MergeSplitFiles(const std::string& base_name) {
     for (size_t i = 0; i < comp.coeffs.size(); i += 64) { // 64 coefficients per block
       guetzli::coeff_t* block_coeffs = &comp.coeffs[i];
       
-      // Read DC coefficient data - the split process writes raw bits and number of bits
-      int dc_nbits = dc_reader.ReadBits(4);     // Read number of bits used (4 bits sufficient for DC size category 0-11)
-      int dc_raw_bits = 0;
-      if (dc_nbits > 0) {
-        dc_raw_bits = dc_reader.ReadBits(dc_nbits); // Read exactly SIZE bits for the raw bits
-      }
+             // Read DC coefficient data - the split process writes Huffman symbol and raw bits
+       int dc_huffman_symbol = dc_reader.ReadBits(8); // Read DC Huffman symbol (size category)
+       int dc_raw_bits = 0;
+       if (dc_huffman_symbol > 0) {
+         dc_raw_bits = dc_reader.ReadBits(dc_huffman_symbol); // Read exactly SIZE bits for the raw bits
+       }
       
-      if (dc_nbits > 0) {
-        // Reconstruct DC coefficient using the raw bits
-        int dc_diff = dc_raw_bits;
-        if (dc_diff < (1 << (dc_nbits - 1))) {
-          dc_diff -= (1 << dc_nbits) - 1;
-        }
-        block_coeffs[0] = last_dc_coeff[comp_idx] + dc_diff;
-        last_dc_coeff[comp_idx] = block_coeffs[0];
-      } else {
-        block_coeffs[0] = last_dc_coeff[comp_idx];
-      }
+             if (dc_huffman_symbol > 0) {
+         // Reconstruct DC coefficient using the raw bits
+         int dc_diff = dc_raw_bits;
+         if (dc_diff < (1 << (dc_huffman_symbol - 1))) {
+           dc_diff -= (1 << dc_huffman_symbol) - 1;
+         }
+         block_coeffs[0] = last_dc_coeff[comp_idx] + dc_diff;
+         last_dc_coeff[comp_idx] = block_coeffs[0];
+       } else {
+         block_coeffs[0] = last_dc_coeff[comp_idx];
+       }
 
-      // Read AC coefficients using RLE+size data
-      int k = 1; // Start from first AC coefficient
-      while (k < 64) {
-        int rle = rlesize_reader.ReadBits(4);
-        int size = rlesize_reader.ReadBits(4);
+             // Read AC coefficients using Huffman symbol data
+       int k = 1; // Start from first AC coefficient
+       while (k < 64) {
+         int ac_huffman_symbol = rlesize_reader.ReadBits(8); // Read AC Huffman symbol (RLE+size)
+         int rle = ac_huffman_symbol >> 4;
+         int size = ac_huffman_symbol & 15;
         
         // Skip zeros based on RLE
         k += rle;
