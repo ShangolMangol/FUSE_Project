@@ -8,7 +8,7 @@ SOURCES = test_huffman_capture.cpp \
            guetzli-master/guetzli/jpeg_data_writer.cc \
            guetzli-master/guetzli/jpeg_huffman_decode.cc \
            guetzli-master/guetzli/entropy_encode.cc \
-           guetzli-master/guetzli/fast_log.cc
+           guetzli-master/guetzli/jpeg_data.cc
 
 OBJECTS = $(SOURCES:.cc=.o)
 OBJECTS := $(OBJECTS:.cpp=.o)
