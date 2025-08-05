@@ -70,6 +70,8 @@ bool MergeSplitFiles(const std::string& base_name) {
   guetzli::SimpleBitReader ac_reader(ac_data.data(), ac_data.size());
 
   // Reconstruct the coefficients from the split data
+  // The split process writes raw bits and RLE+size information from Huffman decoding
+  
   guetzli::coeff_t last_dc_coeff[3] = {0}; // Assuming max 3 components
   
   for (size_t comp_idx = 0; comp_idx < jpg.components.size(); comp_idx++) {
@@ -78,13 +80,16 @@ bool MergeSplitFiles(const std::string& base_name) {
     for (size_t i = 0; i < comp.coeffs.size(); i += 64) { // 64 coefficients per block
       guetzli::coeff_t* block_coeffs = &comp.coeffs[i];
       
-      // Read DC coefficient data
-      int dc_nbits = dc_reader.ReadBits(8);
+      // Read DC coefficient data - the split process writes raw bits and number of bits
+      int dc_nbits = dc_reader.ReadBits(4);     // Read number of bits used (4 bits sufficient for DC size category 0-11)
+      int dc_raw_bits = 0;
+      if (dc_nbits > 0) {
+        dc_raw_bits = dc_reader.ReadBits(dc_nbits); // Read exactly SIZE bits for the raw bits
+      }
       
       if (dc_nbits > 0) {
-        int dc_raw = dc_reader.ReadBits(dc_nbits);
-        // Reconstruct DC coefficient using Huffman decoding
-        int dc_diff = dc_raw;
+        // Reconstruct DC coefficient using the raw bits
+        int dc_diff = dc_raw_bits;
         if (dc_diff < (1 << (dc_nbits - 1))) {
           dc_diff -= (1 << dc_nbits) - 1;
         }
@@ -106,13 +111,13 @@ bool MergeSplitFiles(const std::string& base_name) {
         if (k >= 64) break; // End of block
         
         if (size > 0) {
-          int ac_raw = ac_reader.ReadBits(size);
-          // Reconstruct AC coefficient
-          int ac_val = ac_raw;
+          int ac_raw_bits = ac_reader.ReadBits(size); // Read size bits for AC coefficient
+          // Reconstruct AC coefficient using raw bits
+          int ac_val = ac_raw_bits;
           if (ac_val < (1 << (size - 1))) {
             ac_val -= (1 << size) - 1;
           }
-          block_coeffs[k] = ac_val;
+          block_coeffs[k] = static_cast<guetzli::coeff_t>(ac_val);
         } else {
           block_coeffs[k] = 0;
         }
@@ -212,6 +217,10 @@ int main(int argc, char* argv[]) {
     std::cerr << "Failed to read JPEG file with capture" << std::endl;
     return 1;
   }
+
+  // The original ReadJpegWithCapture wrote the Huffman-decoded data
+  // but we need to ensure we have the complete information for reconstruction
+  // The capture process already wrote the raw bits and RLE+size information
 
   // Write headers file (JPEG headers without scan data)
   std::string headers_data;

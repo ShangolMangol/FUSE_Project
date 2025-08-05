@@ -641,14 +641,17 @@ bool DecodeDCTBlockWithSimpleCapture(const HuffmanTableEntry* dc_huff,
     }
     
     int raw_bits = 0;
+    int original_size = s;  // Store the original size category
     if (s > 0) {
       raw_bits = br->ReadBits(s);
       s = HuffExtend(raw_bits, s);
     }
     
-    // Store DC raw bits
+    // Store DC raw bits and number of bits
     if (dc_raw_writer) {
-      WriteRawBits(raw_bits, s, dc_raw_writer);
+      WriteRawBits(raw_bits, original_size, dc_raw_writer);
+      // Also write the number of bits for reconstruction (4 bits sufficient for DC size category 0-11)
+      dc_raw_writer->WriteBits(original_size, 4); // Write 4 bits for the number of bits
     }
     
     s += *last_dc_coeff;
