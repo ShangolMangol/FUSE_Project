@@ -4,6 +4,13 @@
 #include <fstream>
 #include <string>
 
+// String output function for JPEGOutput
+int StringOut(void* data, const uint8_t* buf, size_t len) {
+  std::string* out = reinterpret_cast<std::string*>(data);
+  out->append(reinterpret_cast<const char*>(buf), len);
+  return len;
+}
+
 int main(int argc, char* argv[]) {
   if (argc != 2) {
     std::cerr << "Usage: " << argv[0] << " <input_jpeg_file>" << std::endl;
@@ -49,7 +56,7 @@ int main(int argc, char* argv[]) {
 
   // Write headers file (JPEG headers without scan data)
   std::string headers_data;
-  guetzli::JPEGOutput headers_output(guetzli::GuetzliStringOut, &headers_data);
+  guetzli::JPEGOutput headers_output(StringOut, &headers_data);
   
   // Create a copy of the JPEG data with zeroed coefficients for headers
   guetzli::JPEGData headers_jpg = jpg;
