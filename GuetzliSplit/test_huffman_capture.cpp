@@ -194,7 +194,7 @@ bool MergeSplitFiles(const std::string& base_name) {
   guetzli::JPEGOutput output(StringOut, &output_data);
   
   // Clear any error state that might have been set during reconstruction
-  jpg.error = JPEG_OK;
+  jpg.error = guetzli::JPEG_OK;
   
   if (!guetzli::WriteJpeg(jpg, false, output, nullptr)) {
     std::cerr << "Failed to write merged JPEG" << std::endl;
