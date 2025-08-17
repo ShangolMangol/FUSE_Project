@@ -331,6 +331,7 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
                               const HuffmanCodeTable& ac_huff,
                               coeff_t* last_dc_coeff,
                               BitWriter* bw,
+                              BitWriter* ac_bw,
                               const SplitMergeOptions* split_merge_opts,
                               void* noncrit_bits) {
   coeff_t temp = coeffs[0] - *last_dc_coeff;
@@ -346,47 +347,31 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     bw->WriteBits(nbits, temp2 & ((1 << nbits) - 1));
   }
   int r = 0;
-  if (split_merge_opts && split_merge_opts->split_jpeg && noncrit_bits) {
-    SimpleBitWriter* writer = reinterpret_cast<SimpleBitWriter*>(noncrit_bits);
-    WriteACBitsToNoncrit(coeffs, writer);
-    for (int k = 1; k < 64; ++k) {
-      coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
-      if (coeff == 0) {
-        r++;
-        continue;
-      }
-      while (r > 15) {
-        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]); // ZRL
-        r -= 16;
-      }
-      int ac_nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
-      int symbol = (r << 4) + ac_nbits;
-      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-      bw->WriteBits(ac_nbits, 0); // Write ZEROES for value bits.
-      r = 0;
+  for (int k = 1; k < 64; ++k) {
+    coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
+    if (coeff == 0) {
+      r++;
+      continue;
     }
-  } else {
-    for (int k = 1; k < 64; ++k) {
-      coeff_t coeff = coeffs[kJPEGNaturalOrder[k]];
-      if (coeff == 0) {
-        r++;
-        continue;
-      }
-      while (r > 15) {
-        bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]); // ZRL
-        r -= 16;
-      }
-      temp2 = coeff;
-      if (temp2 < 0) {
-        temp2 = -temp2;
-        temp2 = ~temp2;
-      }
-      int ac_nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
-      int symbol = (r << 4) + ac_nbits;
-      bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+    while (r > 15) {
+      bw->WriteBits(ac_huff.depth[0xf0], ac_huff.code[0xf0]); // ZRL
+      r -= 16;
+    }
+    temp2 = coeff;
+    if (temp2 < 0) {
+      temp2 = -temp2;
+      temp2 = ~temp2;
+    }
+    int ac_nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
+    int symbol = (r << 4) + ac_nbits;
+    bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
+    // Use AC bit writer for coefficient values if available, otherwise use main bit writer
+    if (ac_bw) {
+      ac_bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
+    } else {
       bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
-      r = 0;
     }
+    r = 0;
   }
   if (r > 0) { // EOB
     bw->WriteBits(ac_huff.depth[0], ac_huff.code[0]);
@@ -400,11 +385,7 @@ bool EncodeScan(const JPEGData& jpg,
                 const SplitMergeOptions* split_merge_opts) {
   coeff_t last_dc_coeff[kMaxComponents] = {0};
   BitWriter bw(1 << 17);
-  SimpleBitWriter noncrit_writer;
-  void* noncrit_bits_ptr = nullptr;
-  if (split_merge_opts && split_merge_opts->split_jpeg) {
-    noncrit_bits_ptr = &noncrit_writer;
-  }
+  BitWriter ac_bw(1 << 17);
   for (int mcu_y = 0; mcu_y < jpg.MCU_rows; ++mcu_y) {
     for (int mcu_x = 0; mcu_x < jpg.MCU_cols; ++mcu_x) {
       for (size_t i = 0; i < jpg.components.size(); ++i) {
@@ -416,8 +397,8 @@ bool EncodeScan(const JPEGData& jpg,
             int block_idx = block_y * c.width_in_blocks + block_x;
             const coeff_t* coeffs = &c.coeffs[block_idx << 6];
             EncodeDCTBlockSequential(coeffs, dc_huff_table[i], ac_huff_table[i],
-                                     &last_dc_coeff[i], &bw,
-                                     split_merge_opts, noncrit_bits_ptr);
+                                     &last_dc_coeff[i], &bw, &ac_bw,
+                                     split_merge_opts, nullptr);
           }
         }
       }
@@ -430,14 +411,17 @@ bool EncodeScan(const JPEGData& jpg,
   bw.JumpToByteBoundary();
   if (!JPEGWrite(out, bw.data.get(), bw.pos)) return false;
   if (split_merge_opts && split_merge_opts->split_jpeg) {
-    FILE* f = fopen(split_merge_opts->noncrit_path.c_str(), "wb");
-    if (!f) {
-      fprintf(stderr, "Failed to open noncrit file for writing: %s\n",
-              split_merge_opts->noncrit_path.c_str());
+    // Write AC bit writer data to separate file
+    std::string ac_path = split_merge_opts->noncrit_path;
+    FILE* ac_f = fopen(ac_path.c_str(), "wb");
+    if (!ac_f) {
+      fprintf(stderr, "Failed to open AC noncrit file for writing: %s\n",
+              ac_path.c_str());
       return false;
     }
-    noncrit_writer.WriteToFile(f);
-    fclose(f);
+    ac_bw.JumpToByteBoundary();
+    fwrite(ac_bw.data.get(), 1, ac_bw.pos, ac_f);
+    fclose(ac_f);
   }
   return !bw.overflow;
 }
@@ -461,116 +445,7 @@ std::vector<uint8_t> ReadFileToVec(const std::string& path) {
 
 // -- Start of functions with external linkage --
 
-void WriteACBitsToNoncrit(const coeff_t* coeffs, SimpleBitWriter* writer) {
-  for (int k = 1; k < 64; ++k) {
-    coeff_t val = coeffs[kJPEGNaturalOrder[k]];
-    if (val == 0) {
-      writer->WriteBits(0, 4); // nbits = 0
-      continue;
-    }
-    
-    coeff_t temp = val;
-    coeff_t temp2;
 
-    if (temp < 0) {
-      temp = -temp;
-      temp2 = ~temp;
-    } else {
-      temp2 = temp;
-    }
-    
-    int nbits = Log2FloorNonZero(temp) + 1;
-    writer->WriteBits(nbits, 4);
-    
-    if (nbits > 0) {
-        writer->WriteBits(temp2 & ((1 << nbits) - 1), nbits);
-    }
-  }
-}
-
-void ReadACBitsFromNoncrit(coeff_t* coeffs, SimpleBitReader* reader) {
-  for (int k = 1; k < 64; ++k) {
-    int nbits = reader->ReadBits(4);
-    if (nbits == 0) {
-      coeffs[kJPEGNaturalOrder[k]] = 0;
-    } else {
-      int val = reader->ReadBits(nbits);
-      if (val < (1 << (nbits - 1))) {
-        val -= (1 << nbits) - 1;
-      }
-      coeffs[kJPEGNaturalOrder[k]] = val;
-    }
-  }
-}
-
-void WriteACNbitsToFile(const coeff_t* coeffs, SimpleBitWriter* writer) {
-  for (int k = 1; k < 64; ++k) {
-    coeff_t val = coeffs[kJPEGNaturalOrder[k]];
-    if (val == 0) {
-      writer->WriteBits(0, 4); // nbits = 0
-    } else {
-      coeff_t temp = val;
-      if (temp < 0) {
-        temp = -temp;
-      }
-      int nbits = Log2FloorNonZero(temp) + 1;
-      writer->WriteBits(nbits, 4);
-    }
-  }
-}
-
-void WriteACValuesToFile(const coeff_t* coeffs, SimpleBitWriter* writer) {
-  for (int k = 1; k < 64; ++k) {
-    coeff_t val = coeffs[kJPEGNaturalOrder[k]];
-    if (val == 0) {
-      continue; // Skip zero values
-    }
-    
-    coeff_t temp = val;
-    coeff_t temp2;
-
-    if (temp < 0) {
-      temp = -temp;
-      temp2 = ~temp;
-    } else {
-      temp2 = temp;
-    }
-    
-    int nbits = Log2FloorNonZero(temp) + 1;
-    if (nbits > 0) {
-        writer->WriteBits(temp2 & ((1 << nbits) - 1), nbits);
-    }
-  }
-}
-
-void ReadACNbitsFromFile(coeff_t* coeffs, SimpleBitReader* reader) {
-  for (int k = 1; k < 64; ++k) {
-    int nbits = reader->ReadBits(4);
-    if (nbits == 0) {
-      coeffs[kJPEGNaturalOrder[k]] = 0;
-    } else {
-      // Store nbits temporarily, we'll read the actual values later
-      coeffs[kJPEGNaturalOrder[k]] = nbits;
-    }
-  }
-}
-
-void ReadACValuesFromFile(coeff_t* coeffs, SimpleBitReader* reader) {
-  for (int k = 1; k < 64; ++k) {
-    coeff_t stored = coeffs[kJPEGNaturalOrder[k]];
-    if (stored == 0) {
-      // Already set to 0, no need to read value
-      continue;
-    }
-    
-    int nbits = static_cast<int>(stored);
-    int val = reader->ReadBits(nbits);
-    if (val < (1 << (nbits - 1))) {
-      val -= (1 << nbits) - 1;
-    }
-    coeffs[kJPEGNaturalOrder[k]] = val;
-  }
-}
 
 size_t HistogramHeaderCost(const JpegHistogram& histo) {
   size_t header_bits = 17 * 8;
@@ -752,65 +627,36 @@ bool MergeCritNoncrit(const std::string& crit_path,
   std::string crit_data_str(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
 
   JPEGData jpg;
-  if (!ReadJpeg(crit_data_str, JPEG_READ_ALL, &jpg)) {
+  bool read_success = ReadJpeg(crit_data_str, JPEG_READ_ALL, &jpg);
+  
+  if (!read_success) {
     fprintf(stderr, "Failed to parse critical JPEG data from %s\n", crit_path.c_str());
     return false;
   }
 
-  // Try to determine if we're using the new format (separated nbits and values)
-  // by checking if the nbits file exists
-  std::string base_path = crit_path;
-  size_t crit_pos = base_path.rfind(".jpg.crit");
-  if (crit_pos != std::string::npos) {
-    base_path = base_path.substr(0, crit_pos);
-  } else {
-    // Fallback for old .crit format
-    size_t old_crit_pos = base_path.rfind(".crit");
-    if (old_crit_pos != std::string::npos) {
-      base_path = base_path.substr(0, old_crit_pos);
-    }
+  // Read AC coefficient values from the AC noncrit file
+  std::vector<uint8_t> ac_vec = ReadFileToVec(noncrit_path);
+  if (ac_vec.empty()) {
+    fprintf(stderr, "Failed to read AC noncrit file: %s\n", noncrit_path.c_str());
+    return false;
   }
-  std::string nbits_path = base_path + ".jpg.nbits.crit";
-  
-  // Check if nbits file exists to determine format
-  FILE* test_nbits = fopen(nbits_path.c_str(), "rb");
-  bool use_new_format = (test_nbits != nullptr);
-  if (test_nbits) fclose(test_nbits);
-  
-  if (use_new_format) {
-    // New format: separate nbits and values files
-    std::vector<uint8_t> nbits_vec = ReadFileToVec(nbits_path);
-    if (nbits_vec.empty()) {
-      fprintf(stderr, "Failed to read nbits file: %s\n", nbits_path.c_str());
-      return false;
-    }
-    SimpleBitReader nbits_reader(nbits_vec.data(), nbits_vec.size());
-    
-    std::vector<uint8_t> noncrit_vec = ReadFileToVec(noncrit_path);
-    if (noncrit_vec.empty()) {
-      fprintf(stderr, "Failed to read non-critical file: %s\n", noncrit_path.c_str());
-      return false;
-    }
-    SimpleBitReader values_reader(noncrit_vec.data(), noncrit_vec.size());
+  SimpleBitReader ac_reader(ac_vec.data(), ac_vec.size());
 
-    for (auto& comp : jpg.components) {
-      for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
-        ReadACNbitsFromFile(&comp.coeffs[i], &nbits_reader);
-        ReadACValuesFromFile(&comp.coeffs[i], &values_reader);
-      }
-    }
-  } else {
-    // Old format: combined noncrit file
-    std::vector<uint8_t> noncrit_vec = ReadFileToVec(noncrit_path);
-    if (noncrit_vec.empty()) {
-      fprintf(stderr, "Failed to read non-critical file: %s\n", noncrit_path.c_str());
-      return false;
-    }
-    SimpleBitReader reader(noncrit_vec.data(), noncrit_vec.size());
-
-    for (auto& comp : jpg.components) {
-      for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
-        ReadACBitsFromNoncrit(&comp.coeffs[i], &reader);
+  // Read AC coefficient values and reconstruct the coefficients
+  for (auto& comp : jpg.components) {
+    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
+      // Read AC coefficient values from the AC noncrit file
+      for (int k = 1; k < 64; ++k) {
+        coeff_t stored = comp.coeffs[kJPEGNaturalOrder[k]];
+        if (stored != 0) {
+          // stored contains the nbits, read the actual value
+          int nbits = static_cast<int>(stored);
+          int val = ac_reader.ReadBits(nbits);
+          if (val < (1 << (nbits - 1))) {
+            val -= (1 << nbits) - 1;
+          }
+          comp.coeffs[i + kJPEGNaturalOrder[k]] = val;
+        }
       }
     }
   }

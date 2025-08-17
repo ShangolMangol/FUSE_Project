@@ -45,6 +45,14 @@ bool ReadJpeg(const uint8_t* data, const size_t len, JpegReadMode mode,
 bool ReadJpeg(const std::string& data, JpegReadMode mode,
               JPEGData* jpg);
 
+// Parses the jpeg stream with separate AC data from ac_data[*ac_pos ... ac_len)
+bool ReadJpeg(const uint8_t* data, const size_t len, 
+              const uint8_t* ac_data, const size_t ac_len,
+              JpegReadMode mode, JPEGData* jpg);
+// string variant with separate AC data
+bool ReadJpeg(const std::string& data, const std::string& ac_data,
+              JpegReadMode mode, JPEGData* jpg);
+
 }  // namespace guetzli
 
 #endif  // GUETZLI_JPEG_DATA_READER_H_
