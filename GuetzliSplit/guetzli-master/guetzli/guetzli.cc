@@ -279,28 +279,20 @@ int main(int argc, char** argv) {
   }
 
   if (split_mode) {
-    fprintf(stderr, "DEBUG: Setting up split mode paths\n");
     std::string base_path = out_filename;
-    fprintf(stderr, "DEBUG: Original out_filename: %s\n", out_filename);
     size_t jpg_pos = base_path.rfind(".jpg");
     if (jpg_pos != std::string::npos) {
       base_path = base_path.substr(0, jpg_pos);
-      fprintf(stderr, "DEBUG: Found .jpg extension, base_path now: %s\n", base_path.c_str());
     }
     size_t jpeg_pos = base_path.rfind(".jpeg");
     if (jpeg_pos != std::string::npos) {
         base_path = base_path.substr(0, jpeg_pos);
-        fprintf(stderr, "DEBUG: Found .jpeg extension, base_path now: %s\n", base_path.c_str());
     }
     split_opts.crit_path = base_path + ".jpg.crit";
     split_opts.noncrit_path = base_path + ".jpg.ac.noncrit";
-    fprintf(stderr, "DEBUG: crit_path: %s\n", split_opts.crit_path.c_str());
-    fprintf(stderr, "DEBUG: noncrit_path: %s\n", split_opts.noncrit_path.c_str());
   }
 
-  fprintf(stderr, "DEBUG: Reading input file: %s\n", in_filename);
   std::string in_data = ReadFileOrDie(in_filename);
-  fprintf(stderr, "DEBUG: Input file size: %zu bytes\n", in_data.size());
   std::string out_data;
 
   guetzli::Params params;
@@ -308,7 +300,7 @@ int main(int argc, char** argv) {
       static_cast<float>(guetzli::ButteraugliScoreForQuality(quality));
   // Note: params.split_jpeg is not used in the current implementation
   // The split logic is controlled by the split_merge_opts parameter
-  fprintf(stderr, "DEBUG: split_mode = %d\n", split_mode);
+
 
   guetzli::ProcessStats stats;
   if (verbose) {
@@ -337,25 +329,21 @@ int main(int argc, char** argv) {
       return 1;
     }
   } else {
-    fprintf(stderr, "DEBUG: Processing as JPEG\n");
     guetzli::JPEGData jpg_header;
     if (!guetzli::ReadJpeg(in_data, guetzli::JPEG_READ_HEADER, &jpg_header)) {
       fprintf(stderr, "Input is not a PNG and not a valid JPEG\n");
       return 1;
     }
-    fprintf(stderr, "DEBUG: JPEG header read successfully, dimensions: %dx%d\n", jpg_header.width, jpg_header.height);
     double pixels = static_cast<double>(jpg_header.width) * jpg_header.height;
     if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
                                 memlimit_mb < kLowestMemusageMB)) {
       fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
       return 1;
     }
-    fprintf(stderr, "DEBUG: Calling guetzli::Process with split_opts\n");
     if (!guetzli::Process(params, &stats, in_data, &out_data, split_mode ? &split_opts : nullptr)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
-    fprintf(stderr, "DEBUG: guetzli::Process completed successfully\n");
   }
 
   if (split_mode) {
