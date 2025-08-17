@@ -369,13 +369,16 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     int ac_nbits = Log2FloorNonZero(std::abs(coeff)) + 1;
     int symbol = (r << 4) + ac_nbits;
     bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
-    // Use AC bit writer for coefficient values if available, otherwise use main bit writer
-    if (ac_bw) {
+    // Use AC bit writer for coefficient values if splitting, otherwise use main bit writer
+    if (ac_bw && split_merge_opts && split_merge_opts->split_jpeg) {
       if (block_count % 1000 == 0) {
-        fprintf(stderr, "DEBUG: Writing AC bits: nbits=%d, value=%d\n", ac_nbits, temp2 & ((1 << ac_nbits) - 1));
+        fprintf(stderr, "DEBUG: Writing AC bits to separate stream: nbits=%d, value=%d\n", ac_nbits, temp2 & ((1 << ac_nbits) - 1));
       }
       ac_bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
     } else {
+      if (block_count % 1000 == 0) {
+        fprintf(stderr, "DEBUG: Writing AC bits to main stream: nbits=%d, value=%d\n", ac_nbits, temp2 & ((1 << ac_nbits) - 1));
+      }
       bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
     }
     r = 0;
@@ -662,6 +665,10 @@ bool MergeCritNoncrit(const std::string& crit_path,
   JPEGData jpg;
   // Use the ReadJpeg overload that takes ac_data parameters
   // This function will read the critical file and use the AC data to reconstruct coefficients
+  fprintf(stderr, "DEBUG: Calling ReadJpeg with AC data: crit_size=%zu, ac_size=%zu\n", 
+          crit_vec.size(), ac_vec.size());
+  // Use the ReadJpeg overload that takes ac_data parameters
+  // This function will read the critical file and use the AC data to reconstruct coefficients
   bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_vec.data()), 
                                crit_vec.size(),
                                ac_vec.data(), ac_vec.size(),
@@ -673,8 +680,30 @@ bool MergeCritNoncrit(const std::string& crit_path,
   }
   fprintf(stderr, "DEBUG: Successfully read JPEG data with AC reconstruction\n");
 
+  // Debug: Check if AC coefficients were actually reconstructed
+  fprintf(stderr, "DEBUG: Checking reconstructed coefficients...\n");
+  for (size_t i = 0; i < jpg.components.size(); ++i) {
+    const JPEGComponent& comp = jpg.components[i];
+    fprintf(stderr, "DEBUG: Component %zu: %zu coefficients\n", i, comp.coeffs.size());
+    
+    // Check a few blocks to see if AC coefficients are non-zero
+    int non_zero_ac_count = 0;
+    for (size_t j = 0; j < comp.coeffs.size(); j += kDCTBlockSize) {
+      for (int k = 1; k < kDCTBlockSize; ++k) {
+        if (comp.coeffs[j + k] != 0) {
+          non_zero_ac_count++;
+        }
+      }
+    }
+    fprintf(stderr, "DEBUG: Component %zu: %d non-zero AC coefficients\n", i, non_zero_ac_count);
+  }
+
+  // Now we need to write the complete JPEG with all coefficients included
+  // The JPEGData jpg now contains the complete reconstructed coefficients
   std::string out_data;
   JPEGOutput output(GuetzliStringOut, &out_data);
+  
+  // Write as a complete JPEG (not split) - pass nullptr for split_merge_opts
   if (!WriteJpeg(jpg, false, output, nullptr)) {
     fprintf(stderr, "Failed to write merged JPEG data.\n");
     return false;
