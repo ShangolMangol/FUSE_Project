@@ -134,12 +134,17 @@ bool CheckJpegSanity(const JPEGData& jpg) {
 void Processor::OutputJpeg(const JPEGData& jpg,
                            std::string* out,
                            const SplitMergeOptions* split_opts) {
+  fprintf(stderr, "DEBUG: OutputJpeg called with split_opts=%p\n", (void*)split_opts);
+  if (split_opts) {
+    fprintf(stderr, "DEBUG: split_opts->split_jpeg=%d\n", split_opts->split_jpeg);
+  }
   out->clear();
   if (!WriteJpeg(jpg, params_.clear_metadata,
                  JPEGOutput(GuetzliStringOut, out), split_opts)) {
     fprintf(stderr, "Internal error: WriteJpeg failed.\n");
     abort();
   }
+  fprintf(stderr, "DEBUG: WriteJpeg completed successfully\n");
 }
 
 void Processor::MaybeOutput(const std::string& encoded_jpg) {
@@ -892,20 +897,27 @@ bool Process(const Params& params, ProcessStats* stats,
              const std::string& in_data,
              std::string* out_data,
              const SplitMergeOptions* split_opts) {
+  fprintf(stderr, "DEBUG: Process() called with split_opts=%p\n", (void*)split_opts);
+  if (split_opts) {
+    fprintf(stderr, "DEBUG: split_opts->split_jpeg=%d\n", split_opts->split_jpeg);
+  }
   JPEGData jpg;
   if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
     return false;
   }
+  fprintf(stderr, "DEBUG: Decoding JPEG to RGB\n");
   std::vector<uint8_t> rgb = DecodeJpegToRGB(jpg);
   if (rgb.empty()) {
     fprintf(stderr, "Unsupported input JPEG file (e.g. progressive, etc.).\n"
                     "Please provide the input image as a PNG file or a baseline JPEG.\n");
     return false;
   }
+  fprintf(stderr, "DEBUG: JPEG decoded to RGB successfully, size: %zu\n", rgb.size());
   
   // After decoding, we call the other Process function which handles encoding
   // from raw pixels. This ensures the pipeline always starts from a clean state.
+  fprintf(stderr, "DEBUG: Calling Process() with RGB data\n");
   return Process(params, stats, rgb, jpg.width, jpg.height, out_data, split_opts);
 }
 
@@ -913,12 +925,14 @@ bool Process(const Params& params, ProcessStats* stats,
              const std::vector<uint8_t>& rgb, int w, int h,
              std::string* out,
              const SplitMergeOptions* split_opts) {
+  fprintf(stderr, "DEBUG: Process(RGB) called with w=%d, h=%d, split_opts=%p\n", w, h, (void*)split_opts);
   Processor processor;
   JPEGData jpg;
   if (!EncodeRGBToJpeg(rgb, w, h, &jpg)) {
     fprintf(stderr, "Could not create jpg data from rgb pixels\n");
     return false;
   }
+  fprintf(stderr, "DEBUG: RGB encoded to JPEG successfully\n");
   GuetzliOutput out_struct;
   ProcessStats dummy_stats;
   if (stats == nullptr) stats = &dummy_stats;
@@ -926,7 +940,9 @@ bool Process(const Params& params, ProcessStats* stats,
   if (w >= 32 && h >= 32) {
     comparator.reset(new ButteraugliComparator(w, h, &rgb, params.butteraugli_target, stats));
   }
+  fprintf(stderr, "DEBUG: Calling ProcessJpegData\n");
   bool ok = processor.ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats, split_opts);
+  fprintf(stderr, "DEBUG: ProcessJpegData returned: %d\n", ok);
   *out = out_struct.jpeg_data;
   return ok;
 }
