@@ -2,15 +2,15 @@
 """
 JPEG Performance Testing Script
 
-This script measures the performance of writing and reading JPEG images
-from specified mnt and storage directories. It includes automatic cleanup functionality.
+This script measures the performance of GuetzliSplit operations for JPEG images,
+including splitting, reading, and merging operations. It includes automatic cleanup functionality.
 
 Usage:
-    python3 jpeg_performance_test.py <source_folder> --mnt <mnt_path> --storage <storage_path> [options]
+    python3 jpeg_performance_test.py <source_folder> --output-dir <output_directory> [options]
 
 Examples:
-    python3 jpeg_performance_test.py ../TestImages/ --mnt /mnt/test --storage /storage/test
-    python3 jpeg_performance_test.py ../TestImages/ -m ./mnt_test -s ./storage_test --output results.json
+    python3 jpeg_performance_test.py ../TestImages/ --output-dir ./guetzli_test
+    python3 jpeg_performance_test.py ../TestImages/ -o ./guetzli_test --output results.json
 """
 
 import os
@@ -18,6 +18,7 @@ import shutil
 import time
 import glob
 import argparse
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Tuple
 import json
@@ -25,31 +26,36 @@ from datetime import datetime
 
 
 class JPEGPerformanceTester:
-    def __init__(self, source_folder: str, mnt_path: str, storage_path: str, output_file: str = None):
+    def __init__(self, source_folder: str, output_dir: str, output_file: str = None):
         """
         Initialize the performance tester.
         
         Args:
             source_folder: Path to folder containing JPEG images
-            mnt_path: Path to mnt test directory
-            storage_path: Path to storage test directory
+            output_dir: Path to output directory for GuetzliSplit operations
             output_file: Optional path to save results JSON
         """
         self.source_folder = Path(source_folder)
-        self.mnt_dir = Path(mnt_path)
-        self.storage_dir = Path(storage_path)
+        self.output_dir = Path(output_dir)
         self.output_file = output_file
+        self.guetzli_path = Path('/usr/local/bin/GuetzliSplit')
+        
         self.results = {
             'timestamp': datetime.now().isoformat(),
             'source_folder': str(self.source_folder),
-            'mnt_path': str(self.mnt_dir),
-            'storage_path': str(self.storage_dir),
+            'output_dir': str(self.output_dir),
+            'guetzli_path': str(self.guetzli_path),
             'tests': []
         }
         
-        # Ensure test directories exist
-        self.mnt_dir.mkdir(parents=True, exist_ok=True)
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Check if GuetzliSplit exists
+        if not self.guetzli_path.exists():
+            print(f"Error: GuetzliSplit not found at {self.guetzli_path}")
+            print("This script requires GuetzliSplit to be installed.")
+            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_path}")
     
     def find_jpeg_files(self) -> List[Path]:
         """Find all JPEG files in the source folder."""
@@ -95,8 +101,57 @@ class JPEGPerformanceTester:
             data = f.read()
         return len(data)
     
-    def test_directory(self, test_dir: Path, jpeg_files: List[Path], test_name: str) -> Dict:
-        """Test write and read performance for a specific directory."""
+    def guetzli_split_file(self, source_path: Path, dest_dir: Path) -> Tuple[int, float]:
+        """Split a file using GuetzliSplit and return the total size and time."""
+        if not self.guetzli_path.exists():
+            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_path}")
+        
+        start_time = time.time()
+        
+        # Run GuetzliSplit command
+        cmd = [str(self.guetzli_path), str(source_path), str(dest_dir)]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
+        
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        
+        end_time = time.time()
+        
+        # Calculate total size of split files
+        total_size = 0
+        for split_file in dest_dir.glob(f"{source_path.stem}_*"):
+            if split_file.is_file():
+                total_size += split_file.stat().st_size
+        
+        return total_size, end_time - start_time
+    
+    def guetzli_merge_file(self, source_dir: Path, original_filename: str) -> Tuple[int, float]:
+        """Merge split files using GuetzliSplit and return the size and time."""
+        if not self.guetzli_path.exists():
+            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_path}")
+        
+        start_time = time.time()
+        
+        # Run GuetzliSplit merge command
+        cmd = [str(self.guetzli_path), "--merge", str(source_dir), original_filename]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
+        
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        
+        end_time = time.time()
+        
+        # Get the merged file size
+        merged_file = source_dir / original_filename
+        if merged_file.exists():
+            return merged_file.stat().st_size, end_time - start_time
+        else:
+            raise FileNotFoundError(f"Merged file not found: {merged_file}")
+    
+
+    
+    def test_guetzli_directory(self, test_dir: Path, jpeg_files: List[Path], test_name: str) -> Dict:
+        """Test GuetzliSplit split/merge performance for a specific directory."""
         print(f"\n=== Testing {test_name} ===")
         
         test_results = {
@@ -105,60 +160,79 @@ class JPEGPerformanceTester:
             'files': []
         }
         
-        total_write_time = 0
+        total_split_time = 0
+        total_merge_time = 0
         total_read_time = 0
         total_size = 0
         
         for i, jpeg_file in enumerate(jpeg_files, 1):
             print(f"Processing {i}/{len(jpeg_files)}: {jpeg_file.name}")
             
-            dest_path = test_dir / jpeg_file.name
+            # Create subdirectory for this file's split operations
+            file_test_dir = test_dir / jpeg_file.stem
+            file_test_dir.mkdir(exist_ok=True)
             
-            # Measure write time
-            write_time, file_size = self.measure_file_operation(
-                self.write_file, jpeg_file, dest_path
-            )
-            
-            # Measure read time
-            read_time, _ = self.measure_file_operation(
-                self.read_file, dest_path
-            )
-            
-            file_result = {
-                'filename': jpeg_file.name,
-                'original_size': jpeg_file.stat().st_size,
-                'copied_size': file_size,
-                'write_time': write_time,
-                'read_time': read_time,
-                'write_speed_mbps': (file_size / (1024 * 1024)) / write_time if write_time > 0 else 0,
-                'read_speed_mbps': (file_size / (1024 * 1024)) / read_time if read_time > 0 else 0
+            try:
+                # Measure split time
+                split_size, split_time = self.guetzli_split_file(jpeg_file, file_test_dir)
+                
+                # Measure read time of split files
+                read_time, _ = self.measure_file_operation(
+                    self.read_file, file_test_dir / jpeg_file.name
+                )
+                
+                # Measure merge time
+                merge_size, merge_time = self.guetzli_merge_file(file_test_dir, jpeg_file.name)
+                
+                file_result = {
+                    'filename': jpeg_file.name,
+                    'original_size': jpeg_file.stat().st_size,
+                    'split_size': split_size,
+                    'merge_size': merge_size,
+                    'split_time': split_time,
+                    'read_time': read_time,
+                    'merge_time': merge_time,
+                    'split_speed_mbps': (split_size / (1024 * 1024)) / split_time if split_time > 0 else 0,
+                    'read_speed_mbps': (split_size / (1024 * 1024)) / read_time if read_time > 0 else 0,
+                    'merge_speed_mbps': (merge_size / (1024 * 1024)) / merge_time if merge_time > 0 else 0
+                }
+                
+                test_results['files'].append(file_result)
+                total_split_time += split_time
+                total_merge_time += merge_time
+                total_read_time += read_time
+                total_size += split_size
+                
+                print(f"  Split: {split_time:.4f}s ({file_result['split_speed_mbps']:.2f} MB/s)")
+                print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
+                print(f"  Merge: {merge_time:.4f}s ({file_result['merge_speed_mbps']:.2f} MB/s)")
+                
+            except Exception as e:
+                print(f"  Error processing {jpeg_file.name}: {e}")
+                continue
+        
+        if test_results['files']:
+            # Calculate totals
+            test_results['summary'] = {
+                'total_files': len(test_results['files']),
+                'total_size_mb': total_size / (1024 * 1024),
+                'total_split_time': total_split_time,
+                'total_read_time': total_read_time,
+                'total_merge_time': total_merge_time,
+                'avg_split_speed_mbps': (total_size / (1024 * 1024)) / total_split_time if total_split_time > 0 else 0,
+                'avg_read_speed_mbps': (total_size / (1024 * 1024)) / total_read_time if total_read_time > 0 else 0,
+                'avg_merge_speed_mbps': (total_size / (1024 * 1024)) / total_merge_time if total_merge_time > 0 else 0
             }
             
-            test_results['files'].append(file_result)
-            total_write_time += write_time
-            total_read_time += read_time
-            total_size += file_size
-            
-            print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
-            print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
-        
-        # Calculate totals
-        test_results['summary'] = {
-            'total_files': len(jpeg_files),
-            'total_size_mb': total_size / (1024 * 1024),
-            'total_write_time': total_write_time,
-            'total_read_time': total_read_time,
-            'avg_write_speed_mbps': (total_size / (1024 * 1024)) / total_write_time if total_write_time > 0 else 0,
-            'avg_read_speed_mbps': (total_size / (1024 * 1024)) / total_read_time if total_read_time > 0 else 0
-        }
-        
-        print(f"\n{test_name} Summary:")
-        print(f"  Total files: {test_results['summary']['total_files']}")
-        print(f"  Total size: {test_results['summary']['total_size_mb']:.2f} MB")
-        print(f"  Total write time: {total_write_time:.4f}s")
-        print(f"  Total read time: {total_read_time:.4f}s")
-        print(f"  Avg write speed: {test_results['summary']['avg_write_speed_mbps']:.2f} MB/s")
-        print(f"  Avg read speed: {test_results['summary']['avg_read_speed_mbps']:.2f} MB/s")
+            print(f"\n{test_name} Summary:")
+            print(f"  Total files: {test_results['summary']['total_files']}")
+            print(f"  Total size: {test_results['summary']['total_size_mb']:.2f} MB")
+            print(f"  Total split time: {total_split_time:.4f}s")
+            print(f"  Total read time: {total_read_time:.4f}s")
+            print(f"  Total merge time: {total_merge_time:.4f}s")
+            print(f"  Avg split speed: {test_results['summary']['avg_split_speed_mbps']:.2f} MB/s")
+            print(f"  Avg read speed: {test_results['summary']['avg_read_speed_mbps']:.2f} MB/s")
+            print(f"  Avg merge speed: {test_results['summary']['avg_merge_speed_mbps']:.2f} MB/s")
         
         return test_results
     
@@ -167,16 +241,12 @@ class JPEGPerformanceTester:
         print("\n=== Cleaning up ===")
         
         try:
-            if self.mnt_dir.exists():
-                shutil.rmtree(self.mnt_dir)
-                print(f"Removed {self.mnt_dir}")
-            
-            if self.storage_dir.exists():
-                shutil.rmtree(self.storage_dir)
-                print(f"Removed {self.storage_dir}")
+            if self.output_dir.exists():
+                shutil.rmtree(self.output_dir)
+                print(f"Removed {self.output_dir}")
                 
         except Exception as e:
-            print(f"Warning: Could not clean up directories: {e}")
+            print(f"Warning: Could not clean up directory: {e}")
     
     def save_results(self):
         """Save results to JSON file if output file is specified."""
@@ -190,8 +260,10 @@ class JPEGPerformanceTester:
     
     def run_tests(self):
         """Run all performance tests."""
-        print("=== JPEG Performance Testing ===")
+        print("=== GuetzliSplit Performance Testing ===")
         print(f"Source folder: {self.source_folder}")
+        print(f"Output directory: {self.output_dir}")
+        print(f"GuetzliSplit path: {self.guetzli_path}")
         
         # Find JPEG files
         jpeg_files = self.find_jpeg_files()
@@ -200,16 +272,10 @@ class JPEGPerformanceTester:
             print("No JPEG files found in the source folder!")
             return
         
-        # Test mnt directory
-        mnt_results = self.test_directory(self.mnt_dir, jpeg_files, "MNT Test Directory")
-        self.results['tests'].append(mnt_results)
-        
-        # Test storage directory
-        storage_results = self.test_directory(self.storage_dir, jpeg_files, "Storage Test Directory")
-        self.results['tests'].append(storage_results)
-        
-        # Compare results
-        self.compare_results(mnt_results, storage_results)
+        # Test GuetzliSplit operations
+        guetzli_results = self.test_guetzli_directory(self.output_dir, jpeg_files, "GuetzliSplit Operations")
+        if guetzli_results:
+            self.results['tests'].append(guetzli_results)
         
         # Save results
         self.save_results()
@@ -217,41 +283,14 @@ class JPEGPerformanceTester:
         # Cleanup
         self.cleanup()
     
-    def compare_results(self, mnt_results: Dict, storage_results: Dict):
-        """Compare results between MNT and Storage directories."""
-        print("\n=== Performance Comparison ===")
-        
-        mnt_summary = mnt_results['summary']
-        storage_summary = storage_results['summary']
-        
-        print(f"{'Metric':<20} {'MNT Test':<15} {'Storage Test':<15} {'Difference':<15}")
-        print("-" * 65)
-        
-        # Write speed comparison
-        mnt_write = mnt_summary['avg_write_speed_mbps']
-        storage_write = storage_summary['avg_write_speed_mbps']
-        write_diff = ((storage_write - mnt_write) / mnt_write * 100) if mnt_write > 0 else 0
-        print(f"{'Write Speed (MB/s)':<20} {mnt_write:<15.2f} {storage_write:<15.2f} {write_diff:+.1f}%")
-        
-        # Read speed comparison
-        mnt_read = mnt_summary['avg_read_speed_mbps']
-        storage_read = storage_summary['avg_read_speed_mbps']
-        read_diff = ((storage_read - mnt_read) / mnt_read * 100) if mnt_read > 0 else 0
-        print(f"{'Read Speed (MB/s)':<20} {mnt_read:<15.2f} {storage_read:<15.2f} {read_diff:+.1f}%")
-        
-        # Total time comparison
-        mnt_total = mnt_summary['total_write_time'] + mnt_summary['total_read_time']
-        storage_total = storage_summary['total_write_time'] + storage_summary['total_read_time']
-        time_diff = ((storage_total - mnt_total) / mnt_total * 100) if mnt_total > 0 else 0
-        print(f"{'Total Time (s)':<20} {mnt_total:<15.4f} {storage_total:<15.4f} {time_diff:+.1f}%")
+
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Test JPEG file I/O performance on specified mnt and storage directories')
+    parser = argparse.ArgumentParser(description='Test GuetzliSplit performance for JPEG images')
     parser.add_argument('source_folder', help='Path to folder containing JPEG images')
-    parser.add_argument('--mnt', '-m', required=True, help='Path to mnt test directory')
-    parser.add_argument('--storage', '-s', required=True, help='Path to storage test directory')
-    parser.add_argument('--output', '-o', help='Output JSON file for results')
+    parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for GuetzliSplit operations')
+    parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
     
     args = parser.parse_args()
@@ -262,14 +301,14 @@ def main():
         return 1
     
     # Create tester and run tests
-    tester = JPEGPerformanceTester(args.source_folder, args.mnt, args.storage, args.output)
+    tester = JPEGPerformanceTester(args.source_folder, args.output_dir, args.output)
     
     try:
         tester.run_tests()
         
         if args.no_cleanup:
             print("\nSkipping cleanup as requested.")
-            print(f"Test files remain in: {tester.mnt_dir} and {tester.storage_dir}")
+            print(f"Test files remain in: {tester.output_dir}")
         else:
             tester.cleanup()
             
