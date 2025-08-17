@@ -781,6 +781,15 @@ bool Processor::ProcessJpegData(const Params& params, const JPEGData& jpg_in,
   final_output_ = out;
   stats_ = stats;
 
+  // FAST PATH: If we're just splitting, skip all optimization
+  if (split_opts && split_opts->split_jpeg) {
+    std::string encoded_jpg;
+    OutputJpeg(jpg_in, &encoded_jpg, split_opts);
+    final_output_->jpeg_data = encoded_jpg;
+    final_output_->score = encoded_jpg.size();
+    return true;
+  }
+
   if (params.butteraugli_target > 2.0f) {
     fprintf(stderr,
             "Guetzli should be called with quality >= 84, otherwise the\n"
@@ -892,6 +901,25 @@ bool Process(const Params& params, ProcessStats* stats,
              const std::string& in_data,
              std::string* out_data,
              const SplitMergeOptions* split_opts) {
+  // FAST PATH: If we're just splitting, skip RGB decoding entirely
+  if (split_opts && split_opts->split_jpeg) {
+    JPEGData jpg;
+    if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
+      fprintf(stderr, "Can't read jpg data from input file\n");
+      return false;
+    }
+    
+    Processor processor;
+    GuetzliOutput out_struct;
+    ProcessStats dummy_stats;
+    if (stats == nullptr) stats = &dummy_stats;
+    
+    bool ok = processor.ProcessJpegData(params, jpg, nullptr, &out_struct, stats, split_opts);
+    *out_data = out_struct.jpeg_data;
+    return ok;
+  }
+  
+  // Normal optimization path - decode to RGB first
   JPEGData jpg;
   if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
