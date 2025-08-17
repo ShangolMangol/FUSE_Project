@@ -334,10 +334,6 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
                               BitWriter* ac_bw,
                               const SplitMergeOptions* split_merge_opts,
                               void* noncrit_bits) {
-  static int block_count = 0;
-  if (++block_count % 1000 == 0) {
-    fprintf(stderr, "DEBUG: EncodeDCTBlockSequential called %d times\n", block_count);
-  }
   coeff_t temp = coeffs[0] - *last_dc_coeff;
   *last_dc_coeff = coeffs[0];
   coeff_t temp2 = temp;
@@ -371,14 +367,8 @@ void EncodeDCTBlockSequential(const coeff_t* coeffs,
     bw->WriteBits(ac_huff.depth[symbol], ac_huff.code[symbol]);
     // Use AC bit writer for coefficient values if splitting, otherwise use main bit writer
     if (ac_bw && split_merge_opts && split_merge_opts->split_jpeg) {
-      if (block_count % 1000 == 0) {
-        fprintf(stderr, "DEBUG: Writing AC bits to separate stream: nbits=%d, value=%d\n", ac_nbits, temp2 & ((1 << ac_nbits) - 1));
-      }
       ac_bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
     } else {
-      if (block_count % 1000 == 0) {
-        fprintf(stderr, "DEBUG: Writing AC bits to main stream: nbits=%d, value=%d\n", ac_nbits, temp2 & ((1 << ac_nbits) - 1));
-      }
       bw->WriteBits(ac_nbits, temp2 & ((1 << ac_nbits) - 1));
     }
     r = 0;
@@ -393,10 +383,6 @@ bool EncodeScan(const JPEGData& jpg,
                 const std::vector<HuffmanCodeTable>& ac_huff_table,
                 JPEGOutput out,
                 const SplitMergeOptions* split_merge_opts) {
-  fprintf(stderr, "DEBUG: EncodeScan called with split_merge_opts=%p\n", (void*)split_merge_opts);
-  if (split_merge_opts) {
-    fprintf(stderr, "DEBUG: split_merge_opts->split_jpeg=%d\n", split_merge_opts->split_jpeg);
-  }
   coeff_t last_dc_coeff[kMaxComponents] = {0};
   BitWriter bw(1 << 17);
   BitWriter ac_bw(1 << 17);
@@ -425,22 +411,17 @@ bool EncodeScan(const JPEGData& jpg,
   bw.JumpToByteBoundary();
   if (!JPEGWrite(out, bw.data.get(), bw.pos)) return false;
   if (split_merge_opts && split_merge_opts->split_jpeg) {
-    fprintf(stderr, "DEBUG: Writing AC noncrit file\n");
     // Write AC bit writer data to separate file
     std::string ac_path = split_merge_opts->noncrit_path;
-    fprintf(stderr, "DEBUG: AC path: %s\n", ac_path.c_str());
     FILE* ac_f = fopen(ac_path.c_str(), "wb");
     if (!ac_f) {
       fprintf(stderr, "Failed to open AC noncrit file for writing: %s\n",
               ac_path.c_str());
       return false;
     }
-    fprintf(stderr, "DEBUG: AC file opened successfully\n");
     ac_bw.JumpToByteBoundary();
-    fprintf(stderr, "DEBUG: Writing %zu bytes to AC file\n", ac_bw.pos);
     fwrite(ac_bw.data.get(), 1, ac_bw.pos, ac_f);
     fclose(ac_f);
-    fprintf(stderr, "DEBUG: AC file written and closed\n");
   }
   return !bw.overflow;
 }
@@ -619,15 +600,10 @@ size_t ClusterHistograms(JpegHistogram* histo, size_t* num,
 
 bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
                const SplitMergeOptions* split_merge_opts) {
-  fprintf(stderr, "DEBUG: WriteJpeg called with split_merge_opts=%p\n", (void*)split_merge_opts);
-  if (split_merge_opts) {
-    fprintf(stderr, "DEBUG: split_merge_opts->split_jpeg=%d\n", split_merge_opts->split_jpeg);
-  }
   static const uint8_t kSOIMarker[2] = { 0xff, 0xd8 };
   static const uint8_t kEOIMarker[2] = { 0xff, 0xd9 };
   std::vector<HuffmanCodeTable> dc_codes;
   std::vector<HuffmanCodeTable> ac_codes;
-  fprintf(stderr, "DEBUG: Starting WriteJpeg components\n");
   bool result = (JPEGWrite(out, kSOIMarker, sizeof(kSOIMarker)) &&
           EncodeMetadata(jpg, strip_metadata, out) &&
           EncodeDQT(jpg.quant, out) &&
@@ -636,23 +612,18 @@ bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
           EncodeScan(jpg, dc_codes, ac_codes, out, split_merge_opts) &&
           JPEGWrite(out, kEOIMarker, sizeof(kEOIMarker)) &&
           (strip_metadata || JPEGWrite(out, jpg.tail_data)));
-  fprintf(stderr, "DEBUG: WriteJpeg completed with result=%d\n", result);
   return result;
 }
 
 bool MergeCritNoncrit(const std::string& crit_path,
                       const std::string& noncrit_path,
                       const std::string& out_path) {
-  fprintf(stderr, "DEBUG: MergeCritNoncrit called with crit_path=%s, noncrit_path=%s, out_path=%s\n", 
-          crit_path.c_str(), noncrit_path.c_str(), out_path.c_str());
-  
   // Read the critical file (contains DC coefficients and AC symbols)
   std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
   if (crit_vec.empty()) {
       fprintf(stderr, "Failed to read critical file: %s\n", crit_path.c_str());
       return false;
   }
-  fprintf(stderr, "DEBUG: Critical file size: %zu bytes\n", crit_vec.size());
 
   // Read AC coefficient values from the AC noncrit file
   std::vector<uint8_t> ac_vec = ReadFileToVec(noncrit_path);
@@ -660,13 +631,8 @@ bool MergeCritNoncrit(const std::string& crit_path,
     fprintf(stderr, "Failed to read AC noncrit file: %s\n", noncrit_path.c_str());
     return false;
   }
-  fprintf(stderr, "DEBUG: AC noncrit file size: %zu bytes\n", ac_vec.size());
 
   JPEGData jpg;
-  // Use the ReadJpeg overload that takes ac_data parameters
-  // This function will read the critical file and use the AC data to reconstruct coefficients
-  fprintf(stderr, "DEBUG: Calling ReadJpeg with AC data: crit_size=%zu, ac_size=%zu\n", 
-          crit_vec.size(), ac_vec.size());
   // Use the ReadJpeg overload that takes ac_data parameters
   // This function will read the critical file and use the AC data to reconstruct coefficients
   bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_vec.data()), 
@@ -677,25 +643,6 @@ bool MergeCritNoncrit(const std::string& crit_path,
   if (!read_success) {
     fprintf(stderr, "Failed to parse critical JPEG data from %s\n", crit_path.c_str());
     return false;
-  }
-  fprintf(stderr, "DEBUG: Successfully read JPEG data with AC reconstruction\n");
-
-  // Debug: Check if AC coefficients were actually reconstructed
-  fprintf(stderr, "DEBUG: Checking reconstructed coefficients...\n");
-  for (size_t i = 0; i < jpg.components.size(); ++i) {
-    const JPEGComponent& comp = jpg.components[i];
-    fprintf(stderr, "DEBUG: Component %zu: %zu coefficients\n", i, comp.coeffs.size());
-    
-    // Check a few blocks to see if AC coefficients are non-zero
-    int non_zero_ac_count = 0;
-    for (size_t j = 0; j < comp.coeffs.size(); j += kDCTBlockSize) {
-      for (int k = 1; k < kDCTBlockSize; ++k) {
-        if (comp.coeffs[j + k] != 0) {
-          non_zero_ac_count++;
-        }
-      }
-    }
-    fprintf(stderr, "DEBUG: Component %zu: %d non-zero AC coefficients\n", i, non_zero_ac_count);
   }
 
   // Now we need to write the complete JPEG with all coefficients included
@@ -708,7 +655,6 @@ bool MergeCritNoncrit(const std::string& crit_path,
     fprintf(stderr, "Failed to write merged JPEG data.\n");
     return false;
   }
-  fprintf(stderr, "DEBUG: Successfully wrote merged JPEG data, size: %zu bytes\n", out_data.size());
 
   FILE* fout = fopen(out_path.c_str(), "wb");
   if (!fout) {
@@ -717,7 +663,6 @@ bool MergeCritNoncrit(const std::string& crit_path,
   }
   fwrite(out_data.data(), 1, out_data.size(), fout);
   fclose(fout);
-  fprintf(stderr, "DEBUG: Successfully wrote output file: %s\n", out_path.c_str());
 
   return true;
 }

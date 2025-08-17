@@ -606,10 +606,8 @@ bool DecodeDCTBlock(const HuffmanTableEntry* dc_huff,
       // If ac_br has valid data, use it; otherwise use the main bit stream
       if (ac_br->data_ != nullptr) {
         r = ac_br->ReadBits(s);
-        fprintf(stderr, "DEBUG: Read %d bits from AC data: value=%d\n", s, r);
       } else {
         r = br->ReadBits(s);
-        fprintf(stderr, "DEBUG: Read %d bits from main stream: value=%d\n", s, r);
       }
       s = HuffExtend(r, s);
       coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
@@ -786,12 +784,6 @@ bool ProcessScan(const uint8_t* data, const size_t len,
                  bool is_progressive,
                  size_t* pos,
                  JPEGData* jpg) {
-  fprintf(stderr, "DEBUG: ProcessScan called with ac_data=%p, ac_len=%zu\n", (void*)ac_data, ac_len);
-  if (ac_data != nullptr) {
-    fprintf(stderr, "DEBUG: AC data is available, will use ac_br for coefficient values\n");
-  } else {
-    fprintf(stderr, "DEBUG: No AC data provided, will use main bit stream for all data\n");
-  }
   if (!ProcessSOS(data, len, pos, jpg)) {
     return false;
   }
