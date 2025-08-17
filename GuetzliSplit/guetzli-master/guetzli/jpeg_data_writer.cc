@@ -649,39 +649,23 @@ bool MergeCritNoncrit(const std::string& crit_path,
   }
   std::string crit_data_str(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
 
-  JPEGData jpg;
-  bool read_success = ReadJpeg(crit_data_str, JPEG_READ_ALL, &jpg);
-  
-  if (!read_success) {
-    fprintf(stderr, "Failed to parse critical JPEG data from %s\n", crit_path.c_str());
-    return false;
-  }
-
-  // Read AC coefficient values from the AC noncrit file
+  // Read AC coefficient values from the AC noncrit file first
   std::vector<uint8_t> ac_vec = ReadFileToVec(noncrit_path);
   if (ac_vec.empty()) {
     fprintf(stderr, "Failed to read AC noncrit file: %s\n", noncrit_path.c_str());
     return false;
   }
-  SimpleBitReader ac_reader(ac_vec.data(), ac_vec.size());
 
-  // Read AC coefficient values and reconstruct the coefficients
-  for (auto& comp : jpg.components) {
-    for (size_t i = 0; i < comp.coeffs.size(); i += kDCTBlockSize) {
-      // Read AC coefficient values from the AC noncrit file
-      for (int k = 1; k < 64; ++k) {
-        coeff_t stored = comp.coeffs[kJPEGNaturalOrder[k]];
-        if (stored != 0) {
-          // stored contains the nbits, read the actual value
-          int nbits = static_cast<int>(stored);
-          int val = ac_reader.ReadBits(nbits);
-          if (val < (1 << (nbits - 1))) {
-            val -= (1 << nbits) - 1;
-          }
-          comp.coeffs[i + kJPEGNaturalOrder[k]] = val;
-        }
-      }
-    }
+  JPEGData jpg;
+  // Use the ReadJpeg overload that takes ac_data parameters
+  bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_data_str.data()), 
+                               crit_data_str.size(),
+                               ac_vec.data(), ac_vec.size(),
+                               JPEG_READ_ALL, &jpg);
+  
+  if (!read_success) {
+    fprintf(stderr, "Failed to parse critical JPEG data from %s\n", crit_path.c_str());
+    return false;
   }
 
   std::string out_data;
