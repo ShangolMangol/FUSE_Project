@@ -901,12 +901,17 @@ bool Process(const Params& params, ProcessStats* stats,
   if (split_opts) {
     fprintf(stderr, "DEBUG: split_opts->split_jpeg=%d\n", split_opts->split_jpeg);
   }
+  fprintf(stderr, "DEBUG: About to call ReadJpeg\n");
+  fprintf(stderr, "DEBUG: in_data.size() = %zu\n", in_data.size());
+  fprintf(stderr, "DEBUG: in_data.data() = %p\n", (void*)in_data.data());
+  fprintf(stderr, "DEBUG: Calling ReadJpeg with JPEG_READ_ALL mode\n");
   JPEGData jpg;
   if (!ReadJpeg(in_data, JPEG_READ_ALL, &jpg)) {
     fprintf(stderr, "Can't read jpg data from input file\n");
     return false;
   }
-  fprintf(stderr, "DEBUG: Decoding JPEG to RGB\n");
+  fprintf(stderr, "DEBUG: ReadJpeg completed successfully\n");
+  fprintf(stderr, "DEBUG: About to call DecodeJpegToRGB\n");
   std::vector<uint8_t> rgb = DecodeJpegToRGB(jpg);
   if (rgb.empty()) {
     fprintf(stderr, "Unsupported input JPEG file (e.g. progressive, etc.).\n"

@@ -442,6 +442,11 @@ struct BitReaderState {
       ++pos_;
       return 0;
     }
+    // Handle null data pointer (for ac_br when no ac_data is provided)
+    if (data_ == nullptr) {
+      ++pos_;
+      return 0;
+    }
     uint8_t c = data_[pos_++];
     if (c == 0xff) {
       uint8_t escape = data_[pos_];
@@ -476,6 +481,11 @@ struct BitReaderState {
   // Sets *pos to the next stream position where parsing should continue.
   // Returns false if the stream ended too early.
   bool FinishStream(size_t* pos) {
+    // Handle null data pointer (for ac_br when no ac_data is provided)
+    if (data_ == nullptr) {
+      *pos = pos_;
+      return true;
+    }
     // Give back some bytes that we did not use.
     int unused_bytes_left = bits_left_ >> 3;
     while (unused_bytes_left-- > 0) {
@@ -593,7 +603,12 @@ bool DecodeDCTBlock(const HuffmanTableEntry* dc_huff,
         jpg->error = JPEG_NON_REPRESENTABLE_AC_COEFF;
         return false;
       }
-      r = ac_br->ReadBits(s);
+      // If ac_br has valid data, use it; otherwise use the main bit stream
+      if (ac_br->data_ != nullptr) {
+        r = ac_br->ReadBits(s);
+      } else {
+        r = br->ReadBits(s);
+      }
       s = HuffExtend(r, s);
       coeffs[kJPEGNaturalOrder[k]] = SignedLeftshift(s, Al);
     } else if (r == 15) {
@@ -657,7 +672,12 @@ bool RefineDCTBlock(const HuffmanTableEntry* ac_huff,
           jpg->error = JPEG_INVALID_SYMBOL;
           return false;
         }
-        s = ac_br->ReadBits(1) ? p1 : m1;
+        // If ac_br has valid data, use it; otherwise use the main bit stream
+        if (ac_br->data_ != nullptr) {
+          s = ac_br->ReadBits(1) ? p1 : m1;
+        } else {
+          s = br->ReadBits(1) ? p1 : m1;
+        }
         in_zero_run = false;
       } else {
         if (r != 15) {
@@ -677,7 +697,8 @@ bool RefineDCTBlock(const HuffmanTableEntry* ac_huff,
       do {
         coeff_t thiscoef = coeffs[kJPEGNaturalOrder[k]];
         if (thiscoef != 0) {
-          if (ac_br->ReadBits(1)) {
+          // If ac_br has valid data, use it; otherwise use the main bit stream
+          if ((ac_br->data_ != nullptr ? ac_br->ReadBits(1) : br->ReadBits(1))) {
             if ((thiscoef & p1) == 0) {
               if (thiscoef >= 0) {
                 thiscoef += p1;
@@ -714,7 +735,8 @@ bool RefineDCTBlock(const HuffmanTableEntry* ac_huff,
     for (; k <= Se; k++) {
       coeff_t thiscoef = coeffs[kJPEGNaturalOrder[k]];
       if (thiscoef != 0) {
-        if (ac_br->ReadBits(1)) {
+        // If ac_br has valid data, use it; otherwise use the main bit stream
+        if ((ac_br->data_ != nullptr ? ac_br->ReadBits(1) : br->ReadBits(1))) {
           if ((thiscoef & p1) == 0) {
             if (thiscoef >= 0) {
               thiscoef += p1;
@@ -1077,9 +1099,13 @@ bool ReadJpeg(const uint8_t* data, const size_t len, JpegReadMode mode,
 
 bool ReadJpeg(const std::string& data, JpegReadMode mode,
               JPEGData* jpg) {
-  return ReadJpeg(reinterpret_cast<const uint8_t*>(data.data()),
-                  static_cast<const size_t>(data.size()),
-                  mode, jpg);
+  // Explicitly call the ReadJpeg function that doesn't take ac_data parameters
+  // by using a function pointer to avoid ambiguity
+  bool (*read_jpeg_func)(const uint8_t*, const size_t, JpegReadMode, JPEGData*) = 
+      &ReadJpeg;
+  return read_jpeg_func(reinterpret_cast<const uint8_t*>(data.data()),
+                       static_cast<const size_t>(data.size()),
+                       mode, jpg);
 }
 
 bool ReadJpeg(const uint8_t* data, const size_t len, 
