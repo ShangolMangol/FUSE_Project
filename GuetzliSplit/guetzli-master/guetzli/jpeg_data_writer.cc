@@ -640,26 +640,30 @@ bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
 bool MergeCritNoncrit(const std::string& crit_path,
                       const std::string& noncrit_path,
                       const std::string& out_path) {
-  // **CRASH FIX**: Store the vector in a named variable to prevent its
-  // immediate destruction and the resulting dangling pointer.
+  fprintf(stderr, "DEBUG: MergeCritNoncrit called with crit_path=%s, noncrit_path=%s, out_path=%s\n", 
+          crit_path.c_str(), noncrit_path.c_str(), out_path.c_str());
+  
+  // Read the critical file (contains DC coefficients and AC symbols)
   std::vector<uint8_t> crit_vec = ReadFileToVec(crit_path);
   if (crit_vec.empty()) {
       fprintf(stderr, "Failed to read critical file: %s\n", crit_path.c_str());
       return false;
   }
-  std::string crit_data_str(reinterpret_cast<const char*>(crit_vec.data()), crit_vec.size());
+  fprintf(stderr, "DEBUG: Critical file size: %zu bytes\n", crit_vec.size());
 
-  // Read AC coefficient values from the AC noncrit file first
+  // Read AC coefficient values from the AC noncrit file
   std::vector<uint8_t> ac_vec = ReadFileToVec(noncrit_path);
   if (ac_vec.empty()) {
     fprintf(stderr, "Failed to read AC noncrit file: %s\n", noncrit_path.c_str());
     return false;
   }
+  fprintf(stderr, "DEBUG: AC noncrit file size: %zu bytes\n", ac_vec.size());
 
   JPEGData jpg;
   // Use the ReadJpeg overload that takes ac_data parameters
-  bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_data_str.data()), 
-                               crit_data_str.size(),
+  // This function will read the critical file and use the AC data to reconstruct coefficients
+  bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_vec.data()), 
+                               crit_vec.size(),
                                ac_vec.data(), ac_vec.size(),
                                JPEG_READ_ALL, &jpg);
   
@@ -667,6 +671,7 @@ bool MergeCritNoncrit(const std::string& crit_path,
     fprintf(stderr, "Failed to parse critical JPEG data from %s\n", crit_path.c_str());
     return false;
   }
+  fprintf(stderr, "DEBUG: Successfully read JPEG data with AC reconstruction\n");
 
   std::string out_data;
   JPEGOutput output(GuetzliStringOut, &out_data);
@@ -674,6 +679,7 @@ bool MergeCritNoncrit(const std::string& crit_path,
     fprintf(stderr, "Failed to write merged JPEG data.\n");
     return false;
   }
+  fprintf(stderr, "DEBUG: Successfully wrote merged JPEG data, size: %zu bytes\n", out_data.size());
 
   FILE* fout = fopen(out_path.c_str(), "wb");
   if (!fout) {
@@ -682,6 +688,7 @@ bool MergeCritNoncrit(const std::string& crit_path,
   }
   fwrite(out_data.data(), 1, out_data.size(), fout);
   fclose(fout);
+  fprintf(stderr, "DEBUG: Successfully wrote output file: %s\n", out_path.c_str());
 
   return true;
 }
