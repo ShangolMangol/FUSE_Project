@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-JPEG Performance Testing Script
+GuetzliSplit Performance Testing Script
 
 This script measures the performance of GuetzliSplit operations for JPEG images,
-including splitting, reading, and merging operations. It includes automatic cleanup functionality.
+including splitting, reading, and merging operations using the --split and --merge flags.
+It includes automatic cleanup functionality.
 
 Usage:
     python3 jpeg_performance_test.py <source_folder> --output-dir <output_directory> [options]
@@ -108,8 +109,11 @@ class JPEGPerformanceTester:
         
         start_time = time.time()
         
-        # Run GuetzliSplit command
-        cmd = [str(self.guetzli_path), str(source_path), str(dest_dir)]
+        # Create output filename for split operation
+        output_base = dest_dir / source_path.stem
+        
+        # Run GuetzliSplit command with --split flag
+        cmd = [str(self.guetzli_path), "--split", str(source_path), str(output_base)]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
         
         if result.returncode != 0:
@@ -117,11 +121,15 @@ class JPEGPerformanceTester:
         
         end_time = time.time()
         
-        # Calculate total size of split files
+        # Calculate total size of split files (.crit and .ac.noncrit)
         total_size = 0
-        for split_file in dest_dir.glob(f"{source_path.stem}_*"):
-            if split_file.is_file():
-                total_size += split_file.stat().st_size
+        crit_file = output_base.with_suffix('.jpg.crit')
+        noncrit_file = output_base.with_suffix('.jpg.ac.noncrit')
+        
+        if crit_file.exists():
+            total_size += crit_file.stat().st_size
+        if noncrit_file.exists():
+            total_size += noncrit_file.stat().st_size
         
         return total_size, end_time - start_time
     
@@ -132,8 +140,13 @@ class JPEGPerformanceTester:
         
         start_time = time.time()
         
+        # Create paths for merge operation
+        base_name = Path(original_filename).stem
+        crit_file = source_dir / f"{base_name}.jpg.crit"
+        merged_output = source_dir / f"merged_{original_filename}"
+        
         # Run GuetzliSplit merge command
-        cmd = [str(self.guetzli_path), "--merge", str(source_dir), original_filename]
+        cmd = [str(self.guetzli_path), "--merge", str(crit_file), str(merged_output)]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
         
         if result.returncode != 0:
@@ -142,11 +155,10 @@ class JPEGPerformanceTester:
         end_time = time.time()
         
         # Get the merged file size
-        merged_file = source_dir / original_filename
-        if merged_file.exists():
-            return merged_file.stat().st_size, end_time - start_time
+        if merged_output.exists():
+            return merged_output.stat().st_size, end_time - start_time
         else:
-            raise FileNotFoundError(f"Merged file not found: {merged_file}")
+            raise FileNotFoundError(f"Merged file not found: {merged_output}")
     
 
     
@@ -176,9 +188,11 @@ class JPEGPerformanceTester:
                 # Measure split time
                 split_size, split_time = self.guetzli_split_file(jpeg_file, file_test_dir)
                 
-                # Measure read time of split files
+                # Measure read time of critical file (the main split file)
+                base_name = jpeg_file.stem
+                crit_file = file_test_dir / f"{base_name}.jpg.crit"
                 read_time, _ = self.measure_file_operation(
-                    self.read_file, file_test_dir / jpeg_file.name
+                    self.read_file, crit_file
                 )
                 
                 # Measure merge time
