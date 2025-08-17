@@ -3,7 +3,14 @@
 JPEG Performance Testing Script
 
 This script measures the performance of writing and reading JPEG images
-from /mnt and /storage folders. It includes automatic cleanup functionality.
+from specified mnt and storage directories. It includes automatic cleanup functionality.
+
+Usage:
+    python3 jpeg_performance_test.py <source_folder> --mnt <mnt_path> --storage <storage_path> [options]
+
+Examples:
+    python3 jpeg_performance_test.py ../TestImages/ --mnt /mnt/test --storage /storage/test
+    python3 jpeg_performance_test.py ../TestImages/ -m ./mnt_test -s ./storage_test --output results.json
 """
 
 import os
@@ -18,25 +25,27 @@ from datetime import datetime
 
 
 class JPEGPerformanceTester:
-    def __init__(self, source_folder: str, output_file: str = None):
+    def __init__(self, source_folder: str, mnt_path: str, storage_path: str, output_file: str = None):
         """
         Initialize the performance tester.
         
         Args:
             source_folder: Path to folder containing JPEG images
+            mnt_path: Path to mnt test directory
+            storage_path: Path to storage test directory
             output_file: Optional path to save results JSON
         """
         self.source_folder = Path(source_folder)
+        self.mnt_dir = Path(mnt_path)
+        self.storage_dir = Path(storage_path)
         self.output_file = output_file
         self.results = {
             'timestamp': datetime.now().isoformat(),
             'source_folder': str(self.source_folder),
+            'mnt_path': str(self.mnt_dir),
+            'storage_path': str(self.storage_dir),
             'tests': []
         }
-        
-        # Test directories
-        self.mnt_dir = Path('/mnt/jpeg_test')
-        self.storage_dir = Path('/storage/jpeg_test')
         
         # Ensure test directories exist
         self.mnt_dir.mkdir(parents=True, exist_ok=True)
@@ -191,12 +200,12 @@ class JPEGPerformanceTester:
             print("No JPEG files found in the source folder!")
             return
         
-        # Test /mnt directory
-        mnt_results = self.test_directory(self.mnt_dir, jpeg_files, "MNT Directory")
+        # Test mnt directory
+        mnt_results = self.test_directory(self.mnt_dir, jpeg_files, "MNT Test Directory")
         self.results['tests'].append(mnt_results)
         
-        # Test /storage directory
-        storage_results = self.test_directory(self.storage_dir, jpeg_files, "Storage Directory")
+        # Test storage directory
+        storage_results = self.test_directory(self.storage_dir, jpeg_files, "Storage Test Directory")
         self.results['tests'].append(storage_results)
         
         # Compare results
@@ -215,7 +224,7 @@ class JPEGPerformanceTester:
         mnt_summary = mnt_results['summary']
         storage_summary = storage_results['summary']
         
-        print(f"{'Metric':<20} {'MNT':<15} {'Storage':<15} {'Difference':<15}")
+        print(f"{'Metric':<20} {'MNT Test':<15} {'Storage Test':<15} {'Difference':<15}")
         print("-" * 65)
         
         # Write speed comparison
@@ -238,8 +247,10 @@ class JPEGPerformanceTester:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Test JPEG file I/O performance on /mnt and /storage')
+    parser = argparse.ArgumentParser(description='Test JPEG file I/O performance on specified mnt and storage directories')
     parser.add_argument('source_folder', help='Path to folder containing JPEG images')
+    parser.add_argument('--mnt', '-m', required=True, help='Path to mnt test directory')
+    parser.add_argument('--storage', '-s', required=True, help='Path to storage test directory')
     parser.add_argument('--output', '-o', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
     
@@ -251,7 +262,7 @@ def main():
         return 1
     
     # Create tester and run tests
-    tester = JPEGPerformanceTester(args.source_folder, args.output)
+    tester = JPEGPerformanceTester(args.source_folder, args.mnt, args.storage, args.output)
     
     try:
         tester.run_tests()
