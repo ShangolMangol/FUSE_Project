@@ -35,9 +35,6 @@
 namespace {
 
 constexpr int kDefaultJPEGQuality = 95;
-constexpr int kBytesPerPixel = 350;
-constexpr int kLowestMemusageMB = 100; // in MB
-constexpr int kDefaultMemlimitMB = 6000; // in MB
 
 inline uint8_t BlendOnBlack(const uint8_t val, const uint8_t alpha) {
   return (static_cast<int>(val) * static_cast<int>(alpha) + 128) / 255;
@@ -185,13 +182,11 @@ void Usage() {
       "Flags:\n"
       "  --verbose      - Print a verbose trace of all attempts.\n"
       "  --quality Q    - Visual quality to aim for (JPEG quality value). Default: %d\n"
-      "  --memlimit M   - Memory limit in MB. Default: %d\n"
-      "  --nomemlimit   - Do not limit memory usage.\n"
       "  --split        - Output a .jpg.crit and .jpg.noncrit file instead of a JPEG.\n"
       "                   The output_filename is used as a base name.\n"
       "  --merge        - Input is a .jpg.crit file, merges with corresponding\n"
       "                   .jpg.noncrit file to produce a JPEG.\n",
-      kDefaultJPEGQuality, kDefaultMemlimitMB);
+      kDefaultJPEGQuality);
   exit(1);
 }
 
@@ -202,7 +197,6 @@ int main(int argc, char** argv) {
 
   int verbose = 0;
   int quality = kDefaultJPEGQuality;
-  int memlimit_mb = kDefaultMemlimitMB;
   bool split_mode = false;
   bool merge_mode = false;
 
@@ -214,11 +208,6 @@ int main(int argc, char** argv) {
     } else if (!strcmp(argv[opt_idx], "--quality")) {
       if (++opt_idx >= argc) Usage();
       quality = atoi(argv[opt_idx]);
-    } else if (!strcmp(argv[opt_idx], "--memlimit")) {
-      if (++opt_idx >= argc) Usage();
-      memlimit_mb = atoi(argv[opt_idx]);
-    } else if (!strcmp(argv[opt_idx], "--nomemlimit")) {
-      memlimit_mb = -1;
     } else if (!strcmp(argv[opt_idx], "--split")) {
       split_mode = true;
     } else if (!strcmp(argv[opt_idx], "--merge")) {
@@ -319,11 +308,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     double pixels = static_cast<double>(xsize) * ysize;
-    if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
-                                memlimit_mb < kLowestMemusageMB)) {
-      fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
-      return 1;
-    }
+    // Memory limit check removed - allowing unlimited memory usage
     if (!guetzli::Process(params, &stats, rgb, xsize, ysize, &out_data, split_mode ? &split_opts : nullptr)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
@@ -335,11 +320,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     double pixels = static_cast<double>(jpg_header.width) * jpg_header.height;
-    if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
-                                memlimit_mb < kLowestMemusageMB)) {
-      fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
-      return 1;
-    }
+    // Memory limit check removed - allowing unlimited memory usage
     if (!guetzli::Process(params, &stats, in_data, &out_data, split_mode ? &split_opts : nullptr)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
