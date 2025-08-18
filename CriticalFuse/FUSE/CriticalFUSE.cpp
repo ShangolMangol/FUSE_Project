@@ -516,5 +516,14 @@ int main(int argc, char *argv[]) {
     }
 
     fprintf(stderr, "Using backing directory: %s\n", backing_dir_abs);
-    return fuse_main(argc, argv, &criticalfs_oper, NULL);
+    
+    // Set FUSE options to handle larger files
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    fuse_opt_add_arg(&args, "-o");
+    fuse_opt_add_arg(&args, "max_write=20971520");
+    fuse_opt_add_arg(&args, "max_read=20971520");
+    
+    int ret = fuse_main(args.argc, args.argv, &criticalfs_oper, NULL);
+    fuse_opt_free_args(&args);
+    return ret;
 } 
