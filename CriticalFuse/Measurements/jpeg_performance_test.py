@@ -4,7 +4,8 @@ GuetzliSplit Performance Testing Script
 
 This script measures the performance of GuetzliSplit operations for JPEG images,
 including splitting, reading, and merging operations using the --split and --merge flags.
-It includes automatic cleanup functionality.
+It generates performance graphs showing split/merge times vs file sizes and includes 
+automatic cleanup functionality.
 
 Usage:
     python3 jpeg_performance_test.py <source_folder> --output-dir <output_directory> [options]
@@ -12,6 +13,7 @@ Usage:
 Examples:
     python3 jpeg_performance_test.py ../TestImages/ --output-dir ./guetzli_test
     python3 jpeg_performance_test.py ../TestImages/ -o ./guetzli_test --output results.json
+    python3 jpeg_performance_test.py ../TestImages/ -o ./guetzli_test --preserve-graphs
 """
 
 import os
@@ -24,6 +26,9 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 import json
 from datetime import datetime
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
 
 
 class JPEGPerformanceTester:
@@ -250,17 +255,213 @@ class JPEGPerformanceTester:
         
         return test_results
     
-    def cleanup(self):
+    def cleanup(self, preserve_graphs=False):
         """Clean up test directories."""
         print("\n=== Cleaning up ===")
         
         try:
             if self.output_dir.exists():
-                shutil.rmtree(self.output_dir)
-                print(f"Removed {self.output_dir}")
+                if preserve_graphs:
+                    # Save graph files to a separate directory before cleanup
+                    graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
+                    graphs_dir.mkdir(exist_ok=True)
+                    
+                    # Copy graph files
+                    graph_files = ['performance_analysis.png', 'split_time_analysis.png', 
+                                  'merge_time_analysis.png', 'read_time_analysis.png']
+                    for graph_file in graph_files:
+                        src = self.output_dir / graph_file
+                        if src.exists():
+                            dst = graphs_dir / graph_file
+                            shutil.copy2(src, dst)
+                            print(f"Preserved graph: {dst}")
+                    
+                    # Remove everything except graph files
+                    for item in self.output_dir.iterdir():
+                        if item.is_file() and item.suffix == '.png':
+                            continue  # Keep graph files
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                    print(f"Cleaned up test files, graphs preserved in: {graphs_dir}")
+                else:
+                    shutil.rmtree(self.output_dir)
+                    print(f"Removed {self.output_dir}")
                 
         except Exception as e:
             print(f"Warning: Could not clean up directory: {e}")
+    
+    def create_performance_graphs(self, test_results: Dict):
+        """Create performance graphs for split/merge times vs file sizes."""
+        if not test_results.get('files'):
+            print("No data available for graph generation")
+            return
+        
+        # Extract data for plotting
+        file_sizes = []
+        split_times = []
+        merge_times = []
+        read_times = []
+        filenames = []
+        
+        for file_result in test_results['files']:
+            # Convert file sizes to MB for better readability
+            size_mb = file_result['original_size'] / (1024 * 1024)
+            file_sizes.append(size_mb)
+            split_times.append(file_result['split_time'])
+            merge_times.append(file_result['merge_time'])
+            read_times.append(file_result['read_time'])
+            filenames.append(file_result['filename'])
+        
+        # Create figure with subplots
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+        fig.suptitle('GuetzliSplit Performance Analysis', fontsize=16, fontweight='bold')
+        
+        # Plot 1: Split Time vs File Size
+        ax1.scatter(file_sizes, split_times, alpha=0.7, s=50, color='blue', edgecolors='black')
+        ax1.set_xlabel('File Size (MB)', fontsize=12)
+        ax1.set_ylabel('Split Time (seconds)', fontsize=12)
+        ax1.set_title('Split Time vs File Size', fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        
+        # Add trend line for split times
+        if len(file_sizes) > 1:
+            z = np.polyfit(file_sizes, split_times, 1)
+            p = np.poly1d(z)
+            ax1.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=2)
+            ax1.text(0.05, 0.95, f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}', 
+                    transform=ax1.transAxes, fontsize=10, 
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        
+        # Plot 2: Merge Time vs File Size
+        ax2.scatter(file_sizes, merge_times, alpha=0.7, s=50, color='green', edgecolors='black')
+        ax2.set_xlabel('File Size (MB)', fontsize=12)
+        ax2.set_ylabel('Merge Time (seconds)', fontsize=12)
+        ax2.set_title('Merge Time vs File Size', fontsize=14, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+        
+        # Add trend line for merge times
+        if len(file_sizes) > 1:
+            z = np.polyfit(file_sizes, merge_times, 1)
+            p = np.poly1d(z)
+            ax2.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=2)
+            ax2.text(0.05, 0.95, f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}', 
+                    transform=ax2.transAxes, fontsize=10, 
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        
+        # Plot 3: Read Time vs File Size
+        ax3.scatter(file_sizes, read_times, alpha=0.7, s=50, color='orange', edgecolors='black')
+        ax3.set_xlabel('File Size (MB)', fontsize=12)
+        ax3.set_ylabel('Read Time (seconds)', fontsize=12)
+        ax3.set_title('Read Time vs File Size', fontsize=14, fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+        
+        # Add trend line for read times
+        if len(file_sizes) > 1:
+            z = np.polyfit(file_sizes, read_times, 1)
+            p = np.poly1d(z)
+            ax3.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=2)
+            ax3.text(0.05, 0.95, f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}', 
+                    transform=ax3.transAxes, fontsize=10, 
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        
+        # Adjust layout and save
+        plt.tight_layout()
+        
+        # Save the combined graph
+        graph_path = self.output_dir / "performance_analysis.png"
+        plt.savefig(graph_path, dpi=300, bbox_inches='tight')
+        print(f"Performance graphs saved to: {graph_path}")
+        
+        # Create individual graphs for better detail
+        self.create_individual_graphs(file_sizes, split_times, merge_times, read_times, filenames)
+        
+        plt.close()
+    
+    def create_individual_graphs(self, file_sizes, split_times, merge_times, read_times, filenames):
+        """Create individual detailed graphs for each operation type."""
+        
+        # Individual Split Time Graph
+        plt.figure(figsize=(12, 8))
+        plt.scatter(file_sizes, split_times, alpha=0.8, s=80, color='blue', edgecolors='black')
+        
+        # Add trend line
+        if len(file_sizes) > 1:
+            z = np.polyfit(file_sizes, split_times, 1)
+            p = np.poly1d(z)
+            plt.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=3, label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
+        
+        # Add file labels for some points (avoid overcrowding)
+        for i, filename in enumerate(filenames):
+            if i % max(1, len(filenames) // 8) == 0:  # Show ~8 labels
+                plt.annotate(filename, (file_sizes[i], split_times[i]), 
+                           xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
+        
+        plt.xlabel('File Size (MB)', fontsize=14)
+        plt.ylabel('Split Time (seconds)', fontsize=14)
+        plt.title('GuetzliSplit: Split Time vs File Size', fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        split_graph_path = self.output_dir / "split_time_analysis.png"
+        plt.savefig(split_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Split time graph saved to: {split_graph_path}")
+        plt.close()
+        
+        # Individual Merge Time Graph
+        plt.figure(figsize=(12, 8))
+        plt.scatter(file_sizes, merge_times, alpha=0.8, s=80, color='green', edgecolors='black')
+        
+        # Add trend line
+        if len(file_sizes) > 1:
+            z = np.polyfit(file_sizes, merge_times, 1)
+            p = np.poly1d(z)
+            plt.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=3, label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
+        
+        # Add file labels for some points
+        for i, filename in enumerate(filenames):
+            if i % max(1, len(filenames) // 8) == 0:  # Show ~8 labels
+                plt.annotate(filename, (file_sizes[i], merge_times[i]), 
+                           xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
+        
+        plt.xlabel('File Size (MB)', fontsize=14)
+        plt.ylabel('Merge Time (seconds)', fontsize=14)
+        plt.title('GuetzliSplit: Merge Time vs File Size', fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        merge_graph_path = self.output_dir / "merge_time_analysis.png"
+        plt.savefig(merge_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Merge time graph saved to: {merge_graph_path}")
+        plt.close()
+        
+        # Individual Read Time Graph
+        plt.figure(figsize=(12, 8))
+        plt.scatter(file_sizes, read_times, alpha=0.8, s=80, color='orange', edgecolors='black')
+        
+        # Add trend line
+        if len(file_sizes) > 1:
+            z = np.polyfit(file_sizes, read_times, 1)
+            p = np.poly1d(z)
+            plt.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=3, label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
+        
+        # Add file labels for some points
+        for i, filename in enumerate(filenames):
+            if i % max(1, len(filenames) // 8) == 0:  # Show ~8 labels
+                plt.annotate(filename, (file_sizes[i], read_times[i]), 
+                           xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
+        
+        plt.xlabel('File Size (MB)', fontsize=14)
+        plt.ylabel('Read Time (seconds)', fontsize=14)
+        plt.title('GuetzliSplit: Read Time vs File Size', fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        read_graph_path = self.output_dir / "read_time_analysis.png"
+        plt.savefig(read_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Read time graph saved to: {read_graph_path}")
+        plt.close()
     
     def save_results(self):
         """Save results to JSON file if output file is specified."""
@@ -290,6 +491,10 @@ class JPEGPerformanceTester:
         guetzli_results = self.test_guetzli_directory(self.output_dir, jpeg_files, "GuetzliSplit Operations")
         if guetzli_results:
             self.results['tests'].append(guetzli_results)
+            
+            # Generate performance graphs
+            print("\n=== Generating Performance Graphs ===")
+            self.create_performance_graphs(guetzli_results)
         
         # Save results
         self.save_results()
@@ -306,6 +511,7 @@ def main():
     parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for GuetzliSplit operations')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
+    parser.add_argument('--preserve-graphs', action='store_true', help='Preserve graph files after cleanup')
     
     args = parser.parse_args()
     
@@ -324,15 +530,15 @@ def main():
             print("\nSkipping cleanup as requested.")
             print(f"Test files remain in: {tester.output_dir}")
         else:
-            tester.cleanup()
+            tester.cleanup(preserve_graphs=args.preserve_graphs)
             
     except KeyboardInterrupt:
         print("\n\nTest interrupted by user.")
-        tester.cleanup()
+        tester.cleanup(preserve_graphs=args.preserve_graphs)
         return 1
     except Exception as e:
         print(f"\nError during testing: {e}")
-        tester.cleanup()
+        tester.cleanup(preserve_graphs=args.preserve_graphs)
         return 1
     
     print("\n=== Testing Complete ===")
