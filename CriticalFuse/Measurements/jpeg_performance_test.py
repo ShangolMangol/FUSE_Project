@@ -5,7 +5,8 @@ GuetzliSplit Performance Testing Script
 This script measures the performance of GuetzliSplit operations for JPEG images,
 including splitting, reading, and merging operations using the --split and --merge flags.
 It generates performance graphs showing split/merge times vs file sizes and includes 
-automatic cleanup functionality.
+automatic cleanup functionality. Graphs are automatically saved to a separate directory
+that is never deleted.
 
 Usage:
     python3 jpeg_performance_test.py <source_folder> --output-dir <output_directory> [options]
@@ -13,7 +14,6 @@ Usage:
 Examples:
     python3 jpeg_performance_test.py ../TestImages/ --output-dir ./guetzli_test
     python3 jpeg_performance_test.py ../TestImages/ -o ./guetzli_test --output results.json
-    python3 jpeg_performance_test.py ../TestImages/ -o ./guetzli_test --preserve-graphs
 """
 
 import os
@@ -46,10 +46,15 @@ class JPEGPerformanceTester:
         self.output_file = output_file
         self.guetzli_path = Path('/usr/local/bin/GuetzliSplit')
         
+        # Create separate graphs directory
+        self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
+        self.graphs_dir.mkdir(parents=True, exist_ok=True)
+        
         self.results = {
             'timestamp': datetime.now().isoformat(),
             'source_folder': str(self.source_folder),
             'output_dir': str(self.output_dir),
+            'graphs_dir': str(self.graphs_dir),
             'guetzli_path': str(self.guetzli_path),
             'tests': []
         }
@@ -255,39 +260,17 @@ class JPEGPerformanceTester:
         
         return test_results
     
-    def cleanup(self, preserve_graphs=False):
+    def cleanup(self):
         """Clean up test directories."""
         print("\n=== Cleaning up ===")
         
         try:
             if self.output_dir.exists():
-                if preserve_graphs:
-                    # Save graph files to a separate directory before cleanup
-                    graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
-                    graphs_dir.mkdir(exist_ok=True)
-                    
-                    # Copy graph files
-                    graph_files = ['performance_analysis.png', 'split_time_analysis.png', 
-                                  'merge_time_analysis.png', 'read_time_analysis.png']
-                    for graph_file in graph_files:
-                        src = self.output_dir / graph_file
-                        if src.exists():
-                            dst = graphs_dir / graph_file
-                            shutil.copy2(src, dst)
-                            print(f"Preserved graph: {dst}")
-                    
-                    # Remove everything except graph files
-                    for item in self.output_dir.iterdir():
-                        if item.is_file() and item.suffix == '.png':
-                            continue  # Keep graph files
-                        if item.is_dir():
-                            shutil.rmtree(item)
-                        else:
-                            item.unlink()
-                    print(f"Cleaned up test files, graphs preserved in: {graphs_dir}")
-                else:
-                    shutil.rmtree(self.output_dir)
-                    print(f"Removed {self.output_dir}")
+                shutil.rmtree(self.output_dir)
+                print(f"Removed test directory: {self.output_dir}")
+                
+            # Note: Graphs directory is preserved and never deleted
+            print(f"Graphs preserved in: {self.graphs_dir}")
                 
         except Exception as e:
             print(f"Warning: Could not clean up directory: {e}")
@@ -370,7 +353,7 @@ class JPEGPerformanceTester:
         plt.tight_layout()
         
         # Save the combined graph
-        graph_path = self.output_dir / "performance_analysis.png"
+        graph_path = self.graphs_dir / "performance_analysis.png"
         plt.savefig(graph_path, dpi=300, bbox_inches='tight')
         print(f"Performance graphs saved to: {graph_path}")
         
@@ -404,7 +387,7 @@ class JPEGPerformanceTester:
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        split_graph_path = self.output_dir / "split_time_analysis.png"
+        split_graph_path = self.graphs_dir / "split_time_analysis.png"
         plt.savefig(split_graph_path, dpi=300, bbox_inches='tight')
         print(f"Split time graph saved to: {split_graph_path}")
         plt.close()
@@ -431,7 +414,7 @@ class JPEGPerformanceTester:
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        merge_graph_path = self.output_dir / "merge_time_analysis.png"
+        merge_graph_path = self.graphs_dir / "merge_time_analysis.png"
         plt.savefig(merge_graph_path, dpi=300, bbox_inches='tight')
         print(f"Merge time graph saved to: {merge_graph_path}")
         plt.close()
@@ -458,7 +441,7 @@ class JPEGPerformanceTester:
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        read_graph_path = self.output_dir / "read_time_analysis.png"
+        read_graph_path = self.graphs_dir / "read_time_analysis.png"
         plt.savefig(read_graph_path, dpi=300, bbox_inches='tight')
         print(f"Read time graph saved to: {read_graph_path}")
         plt.close()
@@ -511,7 +494,6 @@ def main():
     parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for GuetzliSplit operations')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
-    parser.add_argument('--preserve-graphs', action='store_true', help='Preserve graph files after cleanup')
     
     args = parser.parse_args()
     
@@ -530,15 +512,15 @@ def main():
             print("\nSkipping cleanup as requested.")
             print(f"Test files remain in: {tester.output_dir}")
         else:
-            tester.cleanup(preserve_graphs=args.preserve_graphs)
+            tester.cleanup()
             
     except KeyboardInterrupt:
         print("\n\nTest interrupted by user.")
-        tester.cleanup(preserve_graphs=args.preserve_graphs)
+        tester.cleanup()
         return 1
     except Exception as e:
         print(f"\nError during testing: {e}")
-        tester.cleanup(preserve_graphs=args.preserve_graphs)
+        tester.cleanup()
         return 1
     
     print("\n=== Testing Complete ===")
