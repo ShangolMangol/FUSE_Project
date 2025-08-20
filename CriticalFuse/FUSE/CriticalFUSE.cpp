@@ -255,7 +255,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
             
             // Get file size first
             struct stat st;
-            if (stat(path, &st) == -1) {
+            if (criticalfs_getattr(path, &st, NULL) != 0) {
                 return -errno;
             }
             readBuffer.total_size = st.st_size;
@@ -290,7 +290,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
         
         // Get file size
         struct stat st;
-        if (stat(fpath, &st) == -1) {
+        if (criticalfs_getattr(path, &st, NULL) != 0) {
             return -errno;
         }
         readBuffer.total_size = st.st_size;
