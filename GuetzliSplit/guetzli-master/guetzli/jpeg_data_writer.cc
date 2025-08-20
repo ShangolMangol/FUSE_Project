@@ -384,8 +384,8 @@ bool EncodeScan(const JPEGData& jpg,
                 JPEGOutput out,
                 const SplitMergeOptions* split_merge_opts) {
   coeff_t last_dc_coeff[kMaxComponents] = {0};
-  BitWriter bw(1 << 17);
-  BitWriter ac_bw(1 << 17);
+  BitWriter bw(1 << 22);
+  BitWriter ac_bw(1 << 22);
   for (int mcu_y = 0; mcu_y < jpg.MCU_rows; ++mcu_y) {
     for (int mcu_x = 0; mcu_x < jpg.MCU_cols; ++mcu_x) {
       for (size_t i = 0; i < jpg.components.size(); ++i) {
