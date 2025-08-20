@@ -16,6 +16,7 @@
 #include <map>
 #include <iostream>
 #include <fstream>
+#include <cstring>
 
 #include "../FileHandlers/AbstractFile.h"
 #include "../FileHandlers/TextFile.h"
@@ -275,7 +276,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
         // Read from buffer
         size_t bytesToRead = std::min(size, readBuffer.total_size - offset);
         if (bytesToRead > 0) {
-            std::memcpy(buf, readBuffer.data.data() + offset, bytesToRead);
+            memcpy(buf, readBuffer.data.data() + offset, bytesToRead);
             std::cout << "Read " << bytesToRead << " bytes from buffer at offset " << offset << std::endl;
             return bytesToRead;
         }
@@ -318,7 +319,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
     // Read from buffer
     size_t bytesToRead = std::min(size, readBuffer.total_size - offset);
     if (bytesToRead > 0) {
-        std::memcpy(buf, readBuffer.data.data() + offset, bytesToRead);
+        memcpy(buf, readBuffer.data.data() + offset, bytesToRead);
         std::cout << "Read " << bytesToRead << " bytes from buffer at offset " << offset << std::endl;
         return bytesToRead;
     }
@@ -353,7 +354,7 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
         }
         
         // Copy data to buffer
-        std::memcpy(buffer.data.data() + offset, buf, size);
+        memcpy(buffer.data.data() + offset, buf, size);
         buffer.total_size = std::max(buffer.total_size, offset + size);
         
         // Just buffer the data - processing will happen in release() when file is closed
