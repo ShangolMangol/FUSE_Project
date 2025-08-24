@@ -67,11 +67,15 @@ static struct fuse* fuse_context = nullptr;
 
 // Helper to force attribute cache invalidation
 static void invalidate_attributes(const char* path) {
-    if (fuse_context) {
+    if (fuse_context && path) {
         // Use FUSE's notification mechanism to invalidate the cache
         // This tells the kernel that the file attributes have changed
-        fuse_invalidate_path(fuse_context, path);
-        std::cout << "Invalidated FUSE cache for path: " << path << std::endl;
+        int result = fuse_invalidate_path(fuse_context, path);
+        if (result == 0) {
+            std::cout << "Invalidated FUSE cache for path: " << path << std::endl;
+        } else {
+            std::cerr << "Failed to invalidate FUSE cache for path: " << path << " (error: " << result << ")" << std::endl;
+        }
     }
 }
 
@@ -423,7 +427,8 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
                 }
             }
         }
-        write_buffers.erase(it);
+        // Use the key to erase instead of the iterator which may be invalid after invalidate_attributes
+        write_buffers.erase(fileKey);
     }
     
     return 0;
@@ -447,11 +452,11 @@ static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
                 if (result == ResultCode::SUCCESS) {
                     std::cout << "Successfully processed file on flush: " << it->second.total_size << " bytes" << std::endl;
                     
-                    
                     // Force FUSE cache invalidation to update file attributes immediately
                     invalidate_attributes(path);
                     
-                    write_buffers.erase(it); // Clean up buffer after successful processing
+                    // Use the key to erase instead of the iterator which may be invalid after invalidate_attributes
+                    write_buffers.erase(fileKey);
                 }
             }
         }
@@ -668,10 +673,29 @@ static void* criticalfs_init(struct fuse_conn_info *conn, struct fuse_config *cf
     (void) cfg;
     
     // Store the FUSE context for notifications
-    fuse_context = fuse_get_context()->fuse;
-    std::cout << "FUSE filesystem initialized" << std::endl;
+    struct fuse_context* ctx = fuse_get_context();
+    if (ctx && ctx->fuse) {
+        fuse_context = ctx->fuse;
+        std::cout << "FUSE filesystem initialized with context" << std::endl;
+    } else {
+        std::cerr << "Warning: Failed to get FUSE context" << std::endl;
+        fuse_context = nullptr;
+    }
     
     return NULL;
+}
+
+static void criticalfs_destroy(void *private_data) {
+    (void) private_data;
+    
+    // Clear all buffers
+    write_buffers.clear();
+    read_buffers.clear();
+    
+    // Clear FUSE context
+    fuse_context = nullptr;
+    
+    std::cout << "FUSE filesystem destroyed" << std::endl;
 }
 
 static const struct fuse_operations criticalfs_oper = {
@@ -700,7 +724,7 @@ static const struct fuse_operations criticalfs_oper = {
     // .releasedir  = ...,
     // .fsyncdir    = ...,
     .init        = criticalfs_init,
-    // .destroy     = ...,
+    .destroy     = criticalfs_destroy,
     // .access      = ...,
     .create      = criticalfs_create,
     // ... other fields ...
