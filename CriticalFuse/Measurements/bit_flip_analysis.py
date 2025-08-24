@@ -315,7 +315,7 @@ class BitFlipAnalyzer:
             print(f"Error calculating SSIM: {e}")
             return 0.0
     
-    def wait_for_fuse_update(self, timeout: int = 5) -> bool:
+    def wait_for_fuse_update(self, timeout: int = 1) -> bool:
         """
         Wait for FUSE filesystem to update after file modification.
         
