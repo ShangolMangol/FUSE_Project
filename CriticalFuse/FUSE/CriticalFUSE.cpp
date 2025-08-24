@@ -411,14 +411,18 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
                         std::cout << "Invalidated read buffer after file write" << std::endl;
                     }
                     
-                    // Force FUSE to refresh file attributes by invalidating the cache
-                    // This will make the file size update immediately in file managers
-                    // We'll use a different approach - update the mapping file with the new size
+                    // Update the mapping file with the new size
                     std::ofstream mappingFile(mappingPath.c_str());
                     if (mappingFile.is_open()) {
                         mappingFile << "size:" << it->second.total_size << std::endl;
                         mappingFile.close();
                         std::cout << "Updated mapping file with new size: " << it->second.total_size << std::endl;
+                    }
+                    
+                    // Force a getattr call to refresh the file attributes immediately
+                    struct stat st;
+                    if (criticalfs_getattr(path, &st, NULL) == 0) {
+                        std::cout << "Forced getattr refresh - file size is now: " << st.st_size << std::endl;
                     }
                 } else {
                     std::cerr << "Failed to process file of size: " << it->second.total_size << " bytes" << std::endl;
@@ -455,6 +459,12 @@ static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
                         mappingFile << "size:" << it->second.total_size << std::endl;
                         mappingFile.close();
                         std::cout << "Updated mapping file with new size on flush: " << it->second.total_size << std::endl;
+                    }
+                    
+                    // Force a getattr call to refresh the file attributes immediately
+                    struct stat st;
+                    if (criticalfs_getattr(path, &st, NULL) == 0) {
+                        std::cout << "Forced getattr refresh on flush - file size is now: " << st.st_size << std::endl;
                     }
                     
                     write_buffers.erase(it); // Clean up buffer after successful processing
