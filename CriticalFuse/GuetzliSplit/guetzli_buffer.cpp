@@ -42,9 +42,9 @@ static int GuetzliStringOut(void* data, const uint8_t* buf, size_t len) {
 std::string GetJpegExtension(const std::string& base_path) {
     // Check if the original file had .jpeg or .jpg extension
     if (base_path.length() >= 5 && base_path.substr(base_path.length() - 5) == ".jpeg") {
-        return ".jpeg";
+        return ""; // Extension already present
     } else if (base_path.length() >= 4 && base_path.substr(base_path.length() - 4) == ".jpg") {
-        return ".jpg";
+        return ""; // Extension already present
     }
     // Default to .jpg if no extension found
     return ".jpg";
