@@ -3,30 +3,34 @@
 Bit Flip Analysis Script for CriticalFUSE
 
 This script uses the BitFlipper executable to introduce random bit flips to non-critical
-files in the storage folder and measures the structural similarity index (SSIM) by
-reading the merged images from the FUSE mount point.
+files and measures the structural similarity index (SSIM) by using GuetzliSplit for
+splitting and merging images.
 
 The script can work in two modes:
-1. Analyze existing .noncrit files in the storage folder
-2. Copy test images to the mount point, let FUSE create split files, then analyze them
+1. Analyze existing .ac.noncrit files in the storage folder
+2. Split test images using GuetzliSplit, then analyze the .ac.noncrit files
 
 Usage:
-    python3 bit_flip_analysis.py <storage_folder> <mount_point> <bitflipper_path> [options]
+    python3 bit_flip_analysis.py <storage_folder> <bitflipper_path> [options]
 
 Examples:
-    # Analyze existing .noncrit files
-    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results
+    # Analyze existing .ac.noncrit files
+    python3 bit_flip_analysis.py ./storage ./BitFlipper --output-dir ./bitflip_results
     
     # Use test images from TestImages folder
-    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results \
+    python3 bit_flip_analysis.py ./storage ./BitFlipper --output-dir ./bitflip_results \
         --test-images ./TestImages --use-test-images
     
     # Use only first 5 test images
-    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results \
+    python3 bit_flip_analysis.py ./storage ./BitFlipper --output-dir ./bitflip_results \
         --test-images ./TestImages --use-test-images --max-test-images 5
     
     # Custom flip range
-    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper -o ./results --flip-range 0.1 5.0
+    python3 bit_flip_analysis.py ./storage ./BitFlipper -o ./results --flip-range 0.1 5.0
+    
+    # Use custom GuetzliSplit path
+    python3 bit_flip_analysis.py ./storage ./BitFlipper --output-dir ./bitflip_results \
+        --guetzli-split /path/to/GuetzliSplit
 """
 
 import os
@@ -46,26 +50,26 @@ import cv2
 
 
 class BitFlipAnalyzer:
-    def __init__(self, storage_folder: str, mount_point: str, bitflipper_path: str, output_dir: str, 
-                 test_images_folder: str = None, output_file: str = None, max_test_images: int = None):
+    def __init__(self, storage_folder: str, bitflipper_path: str, output_dir: str, 
+                 test_images_folder: str = None, output_file: str = None, max_test_images: int = None,
+                 guetzli_split_path: str = "/usr/local/bin/GuetzliSplit"):
         """
         Initialize the bit flip analyzer.
         
         Args:
             storage_folder: Path to storage folder containing .noncrit files
-            mount_point: Path to FUSE mount point where merged images are accessible
             bitflipper_path: Path to BitFlipper executable
             output_dir: Path to output directory for results
             test_images_folder: Path to folder containing test images to copy to mount point
             output_file: Optional path to save results JSON
         """
         self.storage_folder = Path(storage_folder)
-        self.mount_point = Path(mount_point)
         self.bitflipper_path = Path(bitflipper_path)
         self.output_dir = Path(output_dir)
         self.test_images_folder = Path(test_images_folder) if test_images_folder else None
         self.output_file = output_file
         self.max_test_images = max_test_images
+        self.guetzli_split_path = Path(guetzli_split_path)
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -74,8 +78,8 @@ class BitFlipAnalyzer:
         self.results = {
             'timestamp': datetime.now().isoformat(),
             'storage_folder': str(self.storage_folder),
-            'mount_point': str(self.mount_point),
             'bitflipper_path': str(self.bitflipper_path),
+            'guetzli_split_path': str(self.guetzli_split_path),
             'output_dir': str(self.output_dir),
             'test_images_folder': str(self.test_images_folder) if self.test_images_folder else None,
             'max_test_images': self.max_test_images,
@@ -93,38 +97,11 @@ class BitFlipAnalyzer:
         if not self.bitflipper_path.exists():
             raise FileNotFoundError(f"BitFlipper not found at {self.bitflipper_path}")
         
-        # Verify mount point exists
-        print(f"Checking mount point at: {self.mount_point}")
-        print(f"Mount point exists: {self.mount_point.exists()}")
-        if not self.mount_point.exists():
-            raise FileNotFoundError(f"Mount point not found at {self.mount_point}")
-        
-        # Check mount point permissions and contents
-        try:
-            print(f"Mount point is writable: {os.access(self.mount_point, os.W_OK)}")
-            print(f"Mount point is readable: {os.access(self.mount_point, os.R_OK)}")
-            print(f"Mount point is executable: {os.access(self.mount_point, os.X_OK)}")
-            
-            # List existing files in mount point
-            existing_files = list(self.mount_point.glob("*"))
-            print(f"Existing files in mount point: {len(existing_files)}")
-            for f in existing_files[:5]:  # Show first 5 files
-                print(f"  - {f.name}")
-            if len(existing_files) > 5:
-                print(f"  ... and {len(existing_files) - 5} more files")
-        except Exception as e:
-            print(f"Warning: Could not check mount point details: {e}")
-        
-        # Test if we can write to mount point
-        try:
-            test_file = self.mount_point / "test_write_permission.txt"
-            with open(test_file, 'w') as f:
-                f.write("test")
-            test_file.unlink()  # Clean up
-            print("Mount point write test: SUCCESS")
-        except Exception as e:
-            print(f"Mount point write test: FAILED - {e}")
-            print("This might cause issues with copying test images")
+        # Verify GuetzliSplit executable exists
+        print(f"Checking GuetzliSplit at: {self.guetzli_split_path}")
+        print(f"GuetzliSplit exists: {self.guetzli_split_path.exists()}")
+        if not self.guetzli_split_path.exists():
+            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_split_path}")
         
         # Verify test images folder exists if provided
         if self.test_images_folder:
@@ -134,48 +111,78 @@ class BitFlipAnalyzer:
                 raise FileNotFoundError(f"Test images folder not found at {self.test_images_folder}")
     
     def find_noncrit_files(self) -> List[Path]:
-        """Find all .noncrit files in the storage folder."""
-        noncrit_files = list(self.storage_folder.glob("*.noncrit"))
+        """Find all .ac.noncrit files in the storage folder."""
+        noncrit_files = list(self.storage_folder.glob("*.ac.noncrit"))
         noncrit_files.sort()
         
-        print(f"Found {len(noncrit_files)} .noncrit files in {self.storage_folder}")
+        print(f"Found {len(noncrit_files)} .ac.noncrit files in {self.storage_folder}")
         return noncrit_files
     
-    def copy_test_image_to_mount(self, test_image_path: Path, mount_name: str = None) -> Path:
+
+    
+    def split_image_with_guetzli(self, input_image: Path, output_base: Path) -> bool:
         """
-        Copy a test image to the mount point with a new name.
+        Split an image using GuetzliSplit executable.
         
         Args:
-            test_image_path: Path to test image file
-            mount_name: Optional new name for the image in mount point
+            input_image: Path to input image file
+            output_base: Base path for output files (without extension)
             
         Returns:
-            Path to the copied image in mount point
+            True if successful, False otherwise
         """
-        if not mount_name:
-            mount_name = f"test_{test_image_path.stem}_{int(time.time())}{test_image_path.suffix}"
-        
-        mount_image_path = self.mount_point / mount_name
-        print(f"Copying {test_image_path} to {mount_image_path}")
-        
         try:
-            # Try using shutil.copy2 first
-            shutil.copy2(test_image_path, mount_image_path)
-        except OSError as e:
-            print(f"shutil.copy2 failed: {e}")
-            try:
-                # Fallback to manual copy
-                with open(test_image_path, 'rb') as src:
-                    with open(mount_image_path, 'wb') as dst:
-                        dst.write(src.read())
-            except Exception as e2:
-                print(f"Manual copy also failed: {e2}")
-                raise
+            # GuetzliSplit command: GuetzliSplit --split input_image output_base
+            cmd = [str(self.guetzli_split_path), "--split", str(input_image), str(output_base)]
+            print(f"Running GuetzliSplit split command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode != 0:
+                print(f"GuetzliSplit failed: {result.stderr}")
+                return False
+            
+            print(f"GuetzliSplit split successful")
+            return True
+            
+        except subprocess.TimeoutExpired:
+            print(f"GuetzliSplit timed out for {input_image}")
+            return False
+        except Exception as e:
+            print(f"Error running GuetzliSplit: {e}")
+            return False
+    
+    def merge_image_with_guetzli(self, crit_file: Path, output_image: Path) -> bool:
+        """
+        Merge .crit and .ac.noncrit files using GuetzliSplit executable.
         
-        # Wait for FUSE to process the file
-        time.sleep(2)
-        
-        return mount_image_path
+        Args:
+            crit_file: Path to .crit file
+            output_image: Path for output merged image
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # GuetzliSplit command: GuetzliSplit --merge crit_file output_image
+            cmd = [str(self.guetzli_split_path), "--merge", str(crit_file), str(output_image)]
+            print(f"Running GuetzliSplit merge command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode != 0:
+                print(f"GuetzliSplit merge failed: {result.stderr}")
+                return False
+            
+            print(f"GuetzliSplit merge successful")
+            return True
+            
+        except subprocess.TimeoutExpired:
+            print(f"GuetzliSplit merge timed out for {crit_file}")
+            return False
+        except Exception as e:
+            print(f"Error running GuetzliSplit merge: {e}")
+            return False
     
     def find_test_images(self) -> List[Path]:
         """Find all test images in the test images folder."""
@@ -183,7 +190,7 @@ class BitFlipAnalyzer:
             return []
         
         # Look for common image extensions
-        image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.dng']
+        image_extensions = ['*.jpg', '*.jpeg']
         test_images = []
         
         for ext in image_extensions:
@@ -200,34 +207,7 @@ class BitFlipAnalyzer:
         
         return test_images
     
-    def find_merged_image(self, noncrit_file: Path) -> Path:
-        """
-        Find the corresponding merged image in the mount point.
-        
-        Args:
-            noncrit_file: Path to .noncrit file
-            
-        Returns:
-            Path to merged image in mount point, or None if not found
-        """
-        # Get the base filename without .noncrit extension
-        base_name = noncrit_file.stem
-        
-        # Look for the merged image in the mount point
-        # The merged image should have the original extension (jpg, png, etc.)
-        possible_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.dng']
-        
-        for ext in possible_extensions:
-            merged_image = self.mount_point / f"{base_name}{ext}"
-            if merged_image.exists():
-                return merged_image
-        
-        # If no extension found, try without extension
-        merged_image = self.mount_point / base_name
-        if merged_image.exists():
-            return merged_image
-        
-        return None
+
     
     def run_bitflipper(self, input_file: Path, flip_percentage: float) -> bool:
         """
@@ -243,7 +223,8 @@ class BitFlipAnalyzer:
         try:
             # Create a backup of the original file
             backup_file = input_file.with_suffix(input_file.suffix + '.backup')
-            shutil.copy2(input_file, backup_file)
+            with open(input_file, 'rb') as src, open(backup_file, 'wb') as dst:
+                dst.write(src.read())
             
             # Run BitFlipper command in random mode (-r)
             # Use absolute path to ensure it's found
@@ -258,7 +239,8 @@ class BitFlipAnalyzer:
             if result.returncode != 0:
                 print(f"BitFlipper failed: {result.stderr}")
                 # Restore backup
-                shutil.move(backup_file, input_file)
+                with open(backup_file, 'rb') as src, open(input_file, 'wb') as dst:
+                    dst.write(src.read())
                 return False
             
             # Remove backup on success
@@ -269,13 +251,15 @@ class BitFlipAnalyzer:
             print(f"BitFlipper timed out for {input_file}")
             # Restore backup
             if backup_file.exists():
-                shutil.move(backup_file, input_file)
+                with open(backup_file, 'rb') as src, open(input_file, 'wb') as dst:
+                    dst.write(src.read())
             return False
         except Exception as e:
             print(f"Error running BitFlipper: {e}")
             # Restore backup
             if backup_file.exists():
-                shutil.move(backup_file, input_file)
+                with open(backup_file, 'rb') as src, open(input_file, 'wb') as dst:
+                    dst.write(src.read())
             return False
     
     def calculate_ssim(self, original_file: Path, modified_file: Path) -> float:
@@ -315,26 +299,14 @@ class BitFlipAnalyzer:
             print(f"Error calculating SSIM: {e}")
             return 0.0
     
-    def wait_for_fuse_update(self, timeout: int = 1) -> bool:
-        """
-        Wait for FUSE filesystem to update after file modification.
-        
-        Args:
-            timeout: Maximum time to wait in seconds
-            
-        Returns:
-            True if update detected, False if timeout
-        """
-        print(f"Waiting up to {timeout} seconds for FUSE update...")
-        time.sleep(timeout)
-        return True
+
     
     def analyze_file_bit_flips(self, noncrit_file: Path, flip_percentages: List[float]) -> Dict:
         """
         Analyze the impact of bit flips on a single file.
         
         Args:
-            noncrit_file: Path to .noncrit file
+            noncrit_file: Path to .ac.noncrit file
             flip_percentages: List of flip percentages to test
             
         Returns:
@@ -342,21 +314,29 @@ class BitFlipAnalyzer:
         """
         print(f"Analyzing bit flips for: {noncrit_file.name}")
         
-        # Find corresponding merged image in mount point
-        original_merged_image = self.find_merged_image(noncrit_file)
-        if not original_merged_image:
-            print(f"Could not find merged image for {noncrit_file.name} in mount point")
+        # Find the corresponding .crit file
+        crit_file = noncrit_file.with_suffix('.jpg.crit').with_name(noncrit_file.stem.replace('.ac', '') + '.jpg.crit')
+        if not crit_file.exists():
+            print(f"Could not find corresponding .crit file for {noncrit_file.name}")
             return None
         
-        print(f"Found merged image: {original_merged_image}")
+        print(f"Found .crit file: {crit_file}")
         
-        # Create a copy of the original merged image for comparison
-        original_copy = self.output_dir / f"original_{noncrit_file.stem}{original_merged_image.suffix}"
-        shutil.copy2(original_merged_image, original_copy)
+        # Create a copy of the original test image for comparison by merging the original files
+        original_merged = self.output_dir / f"original_{noncrit_file.stem.replace('.ac', '')}.jpg"
+        if not self.merge_image_with_guetzli(crit_file, original_merged):
+            print(f"Failed to merge original files for comparison")
+            return None
+        
+        # Create a backup of the original .ac.noncrit file to restore before each test
+        original_noncrit_backup = self.output_dir / f"original_{noncrit_file.name}"
+        with open(noncrit_file, 'rb') as src, open(original_noncrit_backup, 'wb') as dst:
+            dst.write(src.read())
         
         file_results = {
             'filename': noncrit_file.name,
-            'merged_image': str(original_merged_image),
+            'crit_file': str(crit_file),
+            'noncrit_file': str(noncrit_file),
             'flip_percentages': [],
             'ssim_values': [],
             'file_size': noncrit_file.stat().st_size
@@ -365,43 +345,41 @@ class BitFlipAnalyzer:
         for flip_pct in flip_percentages:
             print(f"  Testing {flip_pct:.2f}% bit flips...")
             
-            # Apply bit flips to the noncrit file
+            # Restore the original .ac.noncrit file before each test
+            with open(original_noncrit_backup, 'rb') as src, open(noncrit_file, 'wb') as dst:
+                dst.write(src.read())
+            
+            # Apply bit flips to the .ac.noncrit file
             if not self.run_bitflipper(noncrit_file, flip_pct):
                 print(f"    BitFlipper failed for {flip_pct:.2f}%")
                 continue
             
-            # Wait for FUSE to update
-            self.wait_for_fuse_update()
-            
-            # Read the updated merged image from mount point
-            updated_merged_image = self.find_merged_image(noncrit_file)
-            if not updated_merged_image or not updated_merged_image.exists():
-                print(f"    Could not find updated merged image for {flip_pct:.2f}%")
+            # Merge the files using GuetzliSplit to get the modified image
+            modified_merged = self.output_dir / f"modified_{noncrit_file.stem.replace('.ac', '')}_{flip_pct:.2f}.jpg"
+            if not self.merge_image_with_guetzli(crit_file, modified_merged):
+                print(f"    GuetzliSplit merge failed for {flip_pct:.2f}%")
                 continue
             
-            # Create a copy of the updated image for analysis
-            updated_copy = self.output_dir / f"updated_{noncrit_file.stem}_{flip_pct:.2f}{updated_merged_image.suffix}"
-            shutil.copy2(updated_merged_image, updated_copy)
-            
             # Calculate SSIM
-            ssim_value = self.calculate_ssim(original_copy, updated_copy)
+            ssim_value = self.calculate_ssim(original_merged, modified_merged)
             
             file_results['flip_percentages'].append(flip_pct)
             file_results['ssim_values'].append(ssim_value)
             
             print(f"    SSIM: {ssim_value:.4f}")
             
-            # Clean up temporary updated copy
-            updated_copy.unlink(missing_ok=True)
+            # Clean up temporary modified merged image
+            modified_merged.unlink(missing_ok=True)
         
-        # Clean up original copy
-        original_copy.unlink(missing_ok=True)
+        # Clean up original merged image and backup
+        original_merged.unlink(missing_ok=True)
+        original_noncrit_backup.unlink(missing_ok=True)
         
         return file_results
     
     def analyze_test_image_bit_flips(self, test_image: Path, flip_percentages: List[float]) -> Dict:
         """
-        Analyze the impact of bit flips on a test image by copying it to mount point.
+        Analyze the impact of bit flips on a test image using GuetzliSplit.
         
         Args:
             test_image: Path to test image file
@@ -412,57 +390,40 @@ class BitFlipAnalyzer:
         """
         print(f"Analyzing bit flips for test image: {test_image.name}")
         
-        # Try to copy test image to mount point with unique name
-        mount_name = f"test_{test_image.stem}_{int(time.time())}{test_image.suffix}"
-        try:
-            mount_image_path = self.copy_test_image_to_mount(test_image, mount_name)
-        except Exception as e:
-            print(f"Failed to copy test image to mount point: {e}")
-            print("Trying to use existing files in mount point...")
-            
-            # Find existing image files in mount point
-            existing_images = []
-            for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.dng']:
-                existing_images.extend(list(self.mount_point.glob(f"*{ext}")))
-                existing_images.extend(list(self.mount_point.glob(f"*{ext.upper()}")))
-            
-            if not existing_images:
-                print("No existing images found in mount point. Cannot proceed.")
-                return None
-            
-            # Use the first existing image
-            mount_image_path = existing_images[0]
-            mount_name = mount_image_path.name
-            print(f"Using existing image: {mount_image_path}")
+        # Create unique base name for split files
+        base_name = f"test_{test_image.stem}_{int(time.time())}"
+        output_base = self.output_dir / base_name
         
-        # Wait for FUSE to create the split files (only if we copied a new file)
-        if mount_name.startswith("test_"):
-            print("Waiting for FUSE to create split files...")
-            time.sleep(3)
-        
-        # Find the corresponding .noncrit file
-        noncrit_file = self.storage_folder / f"{mount_name}.noncrit"
-        if not noncrit_file.exists():
-            print(f"Could not find .noncrit file for {mount_name}")
+        # Split the test image using GuetzliSplit
+        print(f"Splitting {test_image} to {output_base}")
+        if not self.split_image_with_guetzli(test_image, output_base):
+            print(f"Failed to split {test_image}")
             return None
         
-        print(f"Found .noncrit file: {noncrit_file}")
+        # Find the generated .crit and .ac.noncrit files
+        crit_file = output_base.with_suffix('.jpg.crit')
+        noncrit_file = output_base.with_suffix('.jpg.ac.noncrit')
         
-        # Create a copy of the original image for comparison
-        if mount_name.startswith("test_"):
-            # We copied a test image, use the original test image
-            original_copy = self.output_dir / f"original_{test_image.stem}{test_image.suffix}"
-            shutil.copy2(test_image, original_copy)
-        else:
-            # We're using an existing image, copy it as the original
-            original_copy = self.output_dir / f"original_{mount_image_path.stem}{mount_image_path.suffix}"
-            shutil.copy2(mount_image_path, original_copy)
+        if not crit_file.exists() or not noncrit_file.exists():
+            print(f"Split files not found: {crit_file} or {noncrit_file}")
+            return None
+        
+        print(f"Found split files: {crit_file.name}, {noncrit_file.name}")
+        
+        # Create a copy of the original test image for comparison
+        original_copy = self.output_dir / f"original_{test_image.stem}{test_image.suffix}"
+        with open(test_image, 'rb') as src, open(original_copy, 'wb') as dst:
+            dst.write(src.read())
+        
+        # Create a backup of the original .ac.noncrit file to restore before each test
+        original_noncrit_backup = self.output_dir / f"original_{noncrit_file.name}"
+        with open(noncrit_file, 'rb') as src, open(original_noncrit_backup, 'wb') as dst:
+            dst.write(src.read())
         
         file_results = {
             'filename': test_image.name,
-            'mount_name': mount_name,
+            'crit_file': str(crit_file),
             'noncrit_file': str(noncrit_file),
-            'used_existing_image': not mount_name.startswith("test_"),
             'flip_percentages': [],
             'ssim_values': [],
             'file_size': test_image.stat().st_size
@@ -471,36 +432,39 @@ class BitFlipAnalyzer:
         for flip_pct in flip_percentages:
             print(f"  Testing {flip_pct:.2f}% bit flips...")
             
-            # Apply bit flips to the noncrit file
+            # Restore the original .ac.noncrit file before each test
+            with open(original_noncrit_backup, 'rb') as src, open(noncrit_file, 'wb') as dst:
+                dst.write(src.read())
+            
+            # Apply bit flips to the .ac.noncrit file
             if not self.run_bitflipper(noncrit_file, flip_pct):
                 print(f"    BitFlipper failed for {flip_pct:.2f}%")
                 continue
             
-            # Wait for FUSE to update
-            self.wait_for_fuse_update()
-            
-            # Read the updated merged image from mount point
-            if not mount_image_path.exists():
-                print(f"    Could not find updated merged image for {flip_pct:.2f}%")
+            # Merge the files using GuetzliSplit to get the modified image
+            merged_image = self.output_dir / f"merged_{test_image.stem}_{flip_pct:.2f}{test_image.suffix}"
+            if not self.merge_image_with_guetzli(crit_file, merged_image):
+                print(f"    GuetzliSplit merge failed for {flip_pct:.2f}%")
                 continue
             
-            # Create a copy of the updated image for analysis
-            updated_copy = self.output_dir / f"updated_{test_image.stem}_{flip_pct:.2f}{test_image.suffix}"
-            shutil.copy2(mount_image_path, updated_copy)
-            
             # Calculate SSIM
-            ssim_value = self.calculate_ssim(original_copy, updated_copy)
+            ssim_value = self.calculate_ssim(original_copy, merged_image)
             
             file_results['flip_percentages'].append(flip_pct)
             file_results['ssim_values'].append(ssim_value)
             
             print(f"    SSIM: {ssim_value:.4f}")
             
-            # Clean up temporary updated copy
-            updated_copy.unlink(missing_ok=True)
+            # Clean up temporary merged image
+            merged_image.unlink(missing_ok=True)
         
-        # Clean up original copy
+        # Clean up original copy and backup
         original_copy.unlink(missing_ok=True)
+        original_noncrit_backup.unlink(missing_ok=True)
+        
+        # Clean up split files
+        crit_file.unlink(missing_ok=True)
+        noncrit_file.unlink(missing_ok=True)
         
         return file_results
     
@@ -704,7 +668,6 @@ class BitFlipAnalyzer:
         """
         print("=== Bit Flip Analysis for CriticalFUSE (FUSE) ===")
         print(f"Storage folder: {self.storage_folder}")
-        print(f"Mount point: {self.mount_point}")
         print(f"BitFlipper path: {self.bitflipper_path}")
         if self.test_images_folder:
             print(f"Test images folder: {self.test_images_folder}")
@@ -764,12 +727,12 @@ class BitFlipAnalyzer:
 def main():
     parser = argparse.ArgumentParser(description='Analyze Bit Flip Impact on CriticalFUSE Non-Critical Files (FUSE)')
     parser.add_argument('storage_folder', help='Path to storage folder containing .noncrit files')
-    parser.add_argument('mount_point', help='Path to FUSE mount point where merged images are accessible')
     parser.add_argument('bitflipper_path', help='Path to BitFlipper executable')
     parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for results')
     parser.add_argument('--test-images', help='Path to folder containing test images to copy to mount point')
     parser.add_argument('--use-test-images', action='store_true', help='Use test images instead of existing .noncrit files')
     parser.add_argument('--max-test-images', type=int, help='Maximum number of test images to analyze (default: all)')
+    parser.add_argument('--guetzli-split', default='/usr/local/bin/GuetzliSplit', help='Path to GuetzliSplit executable')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--flip-range', nargs=2, type=float, default=[0.1, 5.0], 
                        help='Range of bit flip percentages (min max)')
@@ -784,17 +747,13 @@ def main():
         print(f"Error: Storage folder '{args.storage_folder}' does not exist!")
         return 1
     
-    if not os.path.exists(args.mount_point):
-        print(f"Error: Mount point '{args.mount_point}' does not exist!")
-        return 1
-    
     if not os.path.exists(args.bitflipper_path):
         print(f"Error: BitFlipper executable '{args.bitflipper_path}' does not exist!")
         return 1
     
     # Create analyzer and run analysis
-    analyzer = BitFlipAnalyzer(args.storage_folder, args.mount_point, args.bitflipper_path, 
-                              args.output_dir, args.test_images, args.output, args.max_test_images)
+    analyzer = BitFlipAnalyzer(args.storage_folder, args.bitflipper_path, 
+                              args.output_dir, args.test_images, args.output, args.max_test_images, args.guetzli_split)
     
     try:
         analyzer.run_analysis(flip_range=tuple(args.flip_range), 
