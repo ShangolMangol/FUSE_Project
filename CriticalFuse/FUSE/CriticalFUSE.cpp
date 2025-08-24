@@ -416,14 +416,6 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
                         std::cout << "Invalidated read buffer after file write" << std::endl;
                     }
                     
-                    // Update the mapping file with the new size
-                    std::ofstream mappingFile(mappingPath.c_str());
-                    if (mappingFile.is_open()) {
-                        mappingFile << "size:" << it->second.total_size << std::endl;
-                        mappingFile.close();
-                        std::cout << "Updated mapping file with new size: " << it->second.total_size << std::endl;
-                    }
-                    
                     // Force FUSE cache invalidation to update file attributes immediately
                     invalidate_attributes(path);
                 } else {
@@ -455,13 +447,6 @@ static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
                 if (result == ResultCode::SUCCESS) {
                     std::cout << "Successfully processed file on flush: " << it->second.total_size << " bytes" << std::endl;
                     
-                    // Update the mapping file with the new size
-                    std::ofstream mappingFile(mappingPath.c_str());
-                    if (mappingFile.is_open()) {
-                        mappingFile << "size:" << it->second.total_size << std::endl;
-                        mappingFile.close();
-                        std::cout << "Updated mapping file with new size on flush: " << it->second.total_size << std::endl;
-                    }
                     
                     // Force FUSE cache invalidation to update file attributes immediately
                     invalidate_attributes(path);
