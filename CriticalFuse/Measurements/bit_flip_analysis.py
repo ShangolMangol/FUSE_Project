@@ -6,12 +6,23 @@ This script uses the BitFlipper executable to introduce random bit flips to non-
 files in the storage folder and measures the structural similarity index (SSIM) by
 reading the merged images from the FUSE mount point.
 
+The script can work in two modes:
+1. Analyze existing .noncrit files in the storage folder
+2. Copy test images to the mount point, let FUSE create split files, then analyze them
+
 Usage:
     python3 bit_flip_analysis.py <storage_folder> <mount_point> <bitflipper_path> [options]
 
 Examples:
-    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper.exe --output-dir ./bitflip_results
-    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper.exe -o ./results --flip-range 0.1 5.0
+    # Analyze existing .noncrit files
+    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results
+    
+    # Use test images from TestImages folder
+    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results \
+        --test-images ./TestImages --use-test-images
+    
+    # Custom flip range
+    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper -o ./results --flip-range 0.1 5.0
 """
 
 import os
@@ -32,7 +43,7 @@ import cv2
 
 class BitFlipAnalyzer:
     def __init__(self, storage_folder: str, mount_point: str, bitflipper_path: str, output_dir: str, 
-                 output_file: str = None):
+                 test_images_folder: str = None, output_file: str = None):
         """
         Initialize the bit flip analyzer.
         
@@ -41,12 +52,14 @@ class BitFlipAnalyzer:
             mount_point: Path to FUSE mount point where merged images are accessible
             bitflipper_path: Path to BitFlipper executable
             output_dir: Path to output directory for results
+            test_images_folder: Path to folder containing test images to copy to mount point
             output_file: Optional path to save results JSON
         """
         self.storage_folder = Path(storage_folder)
         self.mount_point = Path(mount_point)
         self.bitflipper_path = Path(bitflipper_path)
         self.output_dir = Path(output_dir)
+        self.test_images_folder = Path(test_images_folder) if test_images_folder else None
         self.output_file = output_file
         
         # Create separate graphs directory
@@ -59,6 +72,7 @@ class BitFlipAnalyzer:
             'mount_point': str(self.mount_point),
             'bitflipper_path': str(self.bitflipper_path),
             'output_dir': str(self.output_dir),
+            'test_images_folder': str(self.test_images_folder) if self.test_images_folder else None,
             'graphs_dir': str(self.graphs_dir),
             'tests': []
         }
@@ -78,6 +92,13 @@ class BitFlipAnalyzer:
         print(f"Mount point exists: {self.mount_point.exists()}")
         if not self.mount_point.exists():
             raise FileNotFoundError(f"Mount point not found at {self.mount_point}")
+        
+        # Verify test images folder exists if provided
+        if self.test_images_folder:
+            print(f"Checking test images folder at: {self.test_images_folder}")
+            print(f"Test images folder exists: {self.test_images_folder.exists()}")
+            if not self.test_images_folder.exists():
+                raise FileNotFoundError(f"Test images folder not found at {self.test_images_folder}")
     
     def find_noncrit_files(self) -> List[Path]:
         """Find all .noncrit files in the storage folder."""
@@ -86,6 +107,46 @@ class BitFlipAnalyzer:
         
         print(f"Found {len(noncrit_files)} .noncrit files in {self.storage_folder}")
         return noncrit_files
+    
+    def copy_test_image_to_mount(self, test_image_path: Path, mount_name: str = None) -> Path:
+        """
+        Copy a test image to the mount point with a new name.
+        
+        Args:
+            test_image_path: Path to test image file
+            mount_name: Optional new name for the image in mount point
+            
+        Returns:
+            Path to the copied image in mount point
+        """
+        if not mount_name:
+            mount_name = f"test_{test_image_path.stem}_{int(time.time())}{test_image_path.suffix}"
+        
+        mount_image_path = self.mount_point / mount_name
+        print(f"Copying {test_image_path} to {mount_image_path}")
+        shutil.copy2(test_image_path, mount_image_path)
+        
+        # Wait for FUSE to process the file
+        time.sleep(2)
+        
+        return mount_image_path
+    
+    def find_test_images(self) -> List[Path]:
+        """Find all test images in the test images folder."""
+        if not self.test_images_folder:
+            return []
+        
+        # Look for common image extensions
+        image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.dng']
+        test_images = []
+        
+        for ext in image_extensions:
+            test_images.extend(list(self.test_images_folder.glob(ext)))
+            test_images.extend(list(self.test_images_folder.glob(ext.upper())))
+        
+        test_images.sort()
+        print(f"Found {len(test_images)} test images in {self.test_images_folder}")
+        return test_images
     
     def find_merged_image(self, noncrit_file: Path) -> Path:
         """
@@ -269,6 +330,84 @@ class BitFlipAnalyzer:
             # Create a copy of the updated image for analysis
             updated_copy = self.output_dir / f"updated_{noncrit_file.stem}_{flip_pct:.2f}{updated_merged_image.suffix}"
             shutil.copy2(updated_merged_image, updated_copy)
+            
+            # Calculate SSIM
+            ssim_value = self.calculate_ssim(original_copy, updated_copy)
+            
+            file_results['flip_percentages'].append(flip_pct)
+            file_results['ssim_values'].append(ssim_value)
+            
+            print(f"    SSIM: {ssim_value:.4f}")
+            
+            # Clean up temporary updated copy
+            updated_copy.unlink(missing_ok=True)
+        
+        # Clean up original copy
+        original_copy.unlink(missing_ok=True)
+        
+        return file_results
+    
+    def analyze_test_image_bit_flips(self, test_image: Path, flip_percentages: List[float]) -> Dict:
+        """
+        Analyze the impact of bit flips on a test image by copying it to mount point.
+        
+        Args:
+            test_image: Path to test image file
+            flip_percentages: List of flip percentages to test
+            
+        Returns:
+            Dictionary with analysis results
+        """
+        print(f"Analyzing bit flips for test image: {test_image.name}")
+        
+        # Copy test image to mount point with unique name
+        mount_name = f"test_{test_image.stem}_{int(time.time())}{test_image.suffix}"
+        mount_image_path = self.copy_test_image_to_mount(test_image, mount_name)
+        
+        # Wait for FUSE to create the split files
+        print("Waiting for FUSE to create split files...")
+        time.sleep(5)
+        
+        # Find the corresponding .noncrit file
+        noncrit_file = self.storage_folder / f"{mount_name}.noncrit"
+        if not noncrit_file.exists():
+            print(f"Could not find .noncrit file for {mount_name}")
+            return None
+        
+        print(f"Found .noncrit file: {noncrit_file}")
+        
+        # Create a copy of the original test image for comparison
+        original_copy = self.output_dir / f"original_{test_image.stem}{test_image.suffix}"
+        shutil.copy2(test_image, original_copy)
+        
+        file_results = {
+            'filename': test_image.name,
+            'mount_name': mount_name,
+            'noncrit_file': str(noncrit_file),
+            'flip_percentages': [],
+            'ssim_values': [],
+            'file_size': test_image.stat().st_size
+        }
+        
+        for flip_pct in flip_percentages:
+            print(f"  Testing {flip_pct:.2f}% bit flips...")
+            
+            # Apply bit flips to the noncrit file
+            if not self.run_bitflipper(noncrit_file, flip_pct):
+                print(f"    BitFlipper failed for {flip_pct:.2f}%")
+                continue
+            
+            # Wait for FUSE to update
+            self.wait_for_fuse_update()
+            
+            # Read the updated merged image from mount point
+            if not mount_image_path.exists():
+                print(f"    Could not find updated merged image for {flip_pct:.2f}%")
+                continue
+            
+            # Create a copy of the updated image for analysis
+            updated_copy = self.output_dir / f"updated_{test_image.stem}_{flip_pct:.2f}{test_image.suffix}"
+            shutil.copy2(mount_image_path, updated_copy)
             
             # Calculate SSIM
             ssim_value = self.calculate_ssim(original_copy, updated_copy)
@@ -475,39 +614,59 @@ class BitFlipAnalyzer:
             print(f"Warning: Could not clean up files: {e}")
     
     def run_analysis(self, flip_range: Tuple[float, float] = (0.1, 5.0), 
-                    flip_steps: int = 20):
+                    flip_steps: int = 20, use_test_images: bool = False):
         """
         Run the complete bit flip analysis.
         
         Args:
             flip_range: Tuple of (min_percentage, max_percentage)
             flip_steps: Number of steps between min and max
+            use_test_images: If True, use test images from TestImages folder
         """
         print("=== Bit Flip Analysis for CriticalFUSE (FUSE) ===")
         print(f"Storage folder: {self.storage_folder}")
         print(f"Mount point: {self.mount_point}")
         print(f"BitFlipper path: {self.bitflipper_path}")
+        if self.test_images_folder:
+            print(f"Test images folder: {self.test_images_folder}")
         print(f"Flip range: {flip_range[0]:.2f}% to {flip_range[1]:.2f}%")
         print(f"Number of steps: {flip_steps}")
-        
-        # Find non-critical files
-        noncrit_files = self.find_noncrit_files()
-        
-        if not noncrit_files:
-            print("No .noncrit files found in the storage folder!")
-            return
+        print(f"Using test images: {use_test_images}")
         
         # Generate flip percentages
         flip_percentages = np.linspace(flip_range[0], flip_range[1], flip_steps)
         print(f"Testing flip percentages: {flip_percentages}")
         
-        # Analyze each file
-        for noncrit_file in noncrit_files:
-            print(f"\nAnalyzing: {noncrit_file.name}")
-            file_results = self.analyze_file_bit_flips(noncrit_file, flip_percentages)
+        if use_test_images and self.test_images_folder:
+            # Use test images
+            test_images = self.find_test_images()
             
-            if file_results:
-                self.results['tests'].append(file_results)
+            if not test_images:
+                print("No test images found in the test images folder!")
+                return
+            
+            # Analyze each test image
+            for test_image in test_images:
+                print(f"\nAnalyzing test image: {test_image.name}")
+                file_results = self.analyze_test_image_bit_flips(test_image, flip_percentages)
+                
+                if file_results:
+                    self.results['tests'].append(file_results)
+        else:
+            # Use existing .noncrit files
+            noncrit_files = self.find_noncrit_files()
+            
+            if not noncrit_files:
+                print("No .noncrit files found in the storage folder!")
+                return
+            
+            # Analyze each file
+            for noncrit_file in noncrit_files:
+                print(f"\nAnalyzing: {noncrit_file.name}")
+                file_results = self.analyze_file_bit_flips(noncrit_file, flip_percentages)
+                
+                if file_results:
+                    self.results['tests'].append(file_results)
         
         # Generate graphs
         if self.results['tests']:
@@ -527,6 +686,8 @@ def main():
     parser.add_argument('mount_point', help='Path to FUSE mount point where merged images are accessible')
     parser.add_argument('bitflipper_path', help='Path to BitFlipper executable')
     parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for results')
+    parser.add_argument('--test-images', help='Path to folder containing test images to copy to mount point')
+    parser.add_argument('--use-test-images', action='store_true', help='Use test images instead of existing .noncrit files')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--flip-range', nargs=2, type=float, default=[0.1, 5.0], 
                        help='Range of bit flip percentages (min max)')
@@ -551,11 +712,12 @@ def main():
     
     # Create analyzer and run analysis
     analyzer = BitFlipAnalyzer(args.storage_folder, args.mount_point, args.bitflipper_path, 
-                              args.output_dir, args.output)
+                              args.output_dir, args.test_images, args.output)
     
     try:
         analyzer.run_analysis(flip_range=tuple(args.flip_range), 
-                            flip_steps=args.flip_steps)
+                            flip_steps=args.flip_steps,
+                            use_test_images=args.use_test_images)
         
         if args.no_cleanup:
             print("\nSkipping cleanup as requested.")
