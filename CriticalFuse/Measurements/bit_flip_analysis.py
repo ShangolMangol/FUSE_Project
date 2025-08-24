@@ -55,7 +55,9 @@ import pickle
 class BitFlipAnalyzer:
     def __init__(self, storage_folder: str, bitflipper_path: str, output_dir: str, 
                  test_images_folder: str = None, output_file: str = None, max_test_images: int = None,
-                 guetzli_split_path: str = "/usr/local/bin/GuetzliSplit", num_processes: int = None):
+                 guetzli_split_path: str = "/usr/local/bin/GuetzliSplit", num_processes: int = None,
+                 skip_ssim: bool = False, fast_mode: bool = False, fast_ssim: bool = True,
+                 cpp_ssim_path: str = None):
         """
         Initialize the bit flip analyzer.
         
@@ -66,6 +68,10 @@ class BitFlipAnalyzer:
             test_images_folder: Path to folder containing test images to copy to mount point
             output_file: Optional path to save results JSON
             num_processes: Number of processes to use for parallel processing
+            skip_ssim: Skip SSIM calculation entirely
+            fast_mode: Use fewer flip percentages for faster processing
+            fast_ssim: Use fast SSIM implementation (PyTorch-based)
+            cpp_ssim_path: Path to C++ SSIM executable (fastest option)
         """
         self.storage_folder = Path(storage_folder)
         self.bitflipper_path = Path(bitflipper_path)
@@ -75,6 +81,15 @@ class BitFlipAnalyzer:
         self.max_test_images = max_test_images
         self.guetzli_split_path = Path(guetzli_split_path)
         self.num_processes = num_processes or min(mp.cpu_count(), 8)  # Limit to 8 processes max
+        self.skip_ssim = skip_ssim
+        self.fast_mode = fast_mode
+        self.fast_ssim = fast_ssim
+        self.cpp_ssim_path = Path(cpp_ssim_path) if cpp_ssim_path else None
+        
+        # Initialize fast SSIM if available
+        self.ssim_fn = None
+        if self.fast_ssim and not self.cpp_ssim_path:
+            self.ssim_fn = self._init_fast_ssim()
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -94,6 +109,10 @@ class BitFlipAnalyzer:
             'max_test_images': self.max_test_images,
             'graphs_dir': str(self.graphs_dir),
             'num_processes': self.num_processes,
+            'skip_ssim': self.skip_ssim,
+            'fast_mode': self.fast_mode,
+            'fast_ssim': self.fast_ssim,
+            'cpp_ssim_path': str(self.cpp_ssim_path) if self.cpp_ssim_path else None,
             'tests': []
         }
         
@@ -259,9 +278,9 @@ class BitFlipAnalyzer:
                     dst.write(src.read())
             return False
     
-    def calculate_ssim(self, original_file: Path, modified_file: Path) -> float:
+    def calculate_ssim_cpp(self, original_file: Path, modified_file: Path) -> float:
         """
-        Calculate SSIM between original and modified files.
+        Calculate SSIM using external C++ executable (fastest option).
         
         Args:
             original_file: Path to original file
@@ -271,30 +290,52 @@ class BitFlipAnalyzer:
             SSIM value (0.0 to 1.0, where 1.0 is identical)
         """
         try:
-            # Read images
-            original_img = cv2.imread(str(original_file))
-            modified_img = cv2.imread(str(modified_file))
+            if not self.cpp_ssim_path or not self.cpp_ssim_path.exists():
+                print(f"C++ SSIM executable not found at {self.cpp_ssim_path}")
+                return self.calculate_ssim_optimized(original_file, modified_file)
             
-            if original_img is None or modified_img is None:
-                print(f"Could not read images: {original_file} or {modified_file}")
-                return 0.0
+            # Run C++ SSIM executable
+            cmd = [str(self.cpp_ssim_path), str(original_file), str(modified_file), "1"]  # Use windowed SSIM
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
-            # Convert to grayscale for SSIM calculation
-            original_gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
-            modified_gray = cv2.cvtColor(modified_img, cv2.COLOR_BGR2GRAY)
+            if result.returncode != 0:
+                print(f"C++ SSIM failed: {result.stderr}")
+                return self.calculate_ssim_optimized(original_file, modified_file)
             
-            # Ensure same size
-            if original_gray.shape != modified_gray.shape:
-                # Resize modified image to match original
-                modified_gray = cv2.resize(modified_gray, (original_gray.shape[1], original_gray.shape[0]))
-            
-            # Calculate SSIM
-            ssim_value = ssim(original_gray, modified_gray)
-            return ssim_value
-            
+            # Parse output
+            try:
+                ssim_value = float(result.stdout.strip())
+                return ssim_value
+            except ValueError:
+                print(f"Invalid SSIM output: {result.stdout}")
+                return self.calculate_ssim_optimized(original_file, modified_file)
+                
+        except subprocess.TimeoutExpired:
+            print(f"C++ SSIM timed out for {original_file}")
+            return self.calculate_ssim_optimized(original_file, modified_file)
         except Exception as e:
-            print(f"Error calculating SSIM: {e}")
-            return 0.0
+            print(f"Error running C++ SSIM: {e}")
+            return self.calculate_ssim_optimized(original_file, modified_file)
+    
+    def calculate_ssim(self, original_file: Path, modified_file: Path) -> float:
+        """
+        Calculate SSIM between original and modified files.
+        Uses the fastest available implementation.
+        
+        Args:
+            original_file: Path to original file
+            modified_file: Path to modified file
+            
+        Returns:
+            SSIM value (0.0 to 1.0, where 1.0 is identical)
+        """
+        # Priority order: C++ > PyTorch > Optimized scikit-image
+        if self.cpp_ssim_path and self.cpp_ssim_path.exists():
+            return self.calculate_ssim_cpp(original_file, modified_file)
+        elif self.fast_ssim and self.ssim_fn is not None:
+            return self.calculate_ssim_fast_pytorch(original_file, modified_file)
+        else:
+            return self.calculate_ssim_optimized(original_file, modified_file)
     
     def process_single_test_image(self, args_tuple):
         """
@@ -454,139 +495,14 @@ class BitFlipAnalyzer:
         
         return file_results
     
-    def calculate_ssim_parallel(self, args_tuple):
-        """
-        Calculate SSIM for a single image comparison in parallel.
-        This method is self-contained to work in separate processes.
-        
-        Args:
-            args_tuple: Tuple containing (original_path, modified_path, filename, flip_pct)
-            
-        Returns:
-            Tuple of (filename, flip_pct, ssim_value)
-        """
-        original_path, modified_path, filename, flip_pct = args_tuple
-        
-        try:
-            import cv2
-            from skimage.metrics import structural_similarity as ssim
-            from pathlib import Path
-            
-            original_path = Path(original_path)
-            modified_path = Path(modified_path)
-            
-            if not original_path.exists() or not modified_path.exists():
-                return (filename, flip_pct, 0.0)
-            
-            # Read images
-            original_img = cv2.imread(str(original_path))
-            modified_img = cv2.imread(str(modified_path))
-            
-            if original_img is None or modified_img is None:
-                return (filename, flip_pct, 0.0)
-            
-            # Convert to grayscale for SSIM calculation
-            original_gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
-            modified_gray = cv2.cvtColor(modified_img, cv2.COLOR_BGR2GRAY)
-            
-            # Ensure same size
-            if original_gray.shape != modified_gray.shape:
-                modified_gray = cv2.resize(modified_gray, (original_gray.shape[1], original_gray.shape[0]))
-            
-            # Calculate SSIM
-            ssim_value = ssim(original_gray, modified_gray)
-            return (filename, flip_pct, ssim_value)
-            
-        except Exception as e:
-            print(f"Error calculating SSIM for {filename} at {flip_pct}%: {e}")
-            return (filename, flip_pct, 0.0)
-    
     def calculate_ssim_batch(self, results_data):
         """
-        Calculate SSIM for all processed images in parallel batch.
+        Calculate SSIM for all processed images in batch.
         
         Args:
             results_data: List of result dictionaries from parallel processing
         """
-        print("\n=== Calculating SSIM for all processed images in parallel ===")
-        
-        # Prepare all SSIM calculation tasks
-        ssim_tasks = []
-        for result in results_data:
-            if not result or not result.get('modified_image_paths'):
-                continue
-            
-            original_path = Path(result['original_image_path'])
-            if not original_path.exists():
-                print(f"Original image not found: {original_path}")
-                continue
-            
-            for i, modified_path_str in enumerate(result['modified_image_paths']):
-                modified_path = Path(modified_path_str)
-                flip_pct = result['flip_percentages'][i] if i < len(result['flip_percentages']) else 0.0
-                ssim_tasks.append((str(original_path), str(modified_path), result['filename'], flip_pct))
-        
-        if not ssim_tasks:
-            print("No SSIM tasks to process")
-            return
-        
-        print(f"Processing {len(ssim_tasks)} SSIM calculations in parallel...")
-        
-        # Process SSIM calculations in parallel
-        ssim_results = {}
-        try:
-            with ProcessPoolExecutor(max_workers=self.num_processes) as executor:
-                futures = [executor.submit(self.calculate_ssim_parallel, task) for task in ssim_tasks]
-                
-                # Collect results with progress tracking
-                completed = 0
-                for future in as_completed(futures):
-                    try:
-                        filename, flip_pct, ssim_value = future.result()
-                        
-                        # Group results by filename
-                        if filename not in ssim_results:
-                            ssim_results[filename] = {'flip_percentages': [], 'ssim_values': []}
-                        
-                        ssim_results[filename]['flip_percentages'].append(flip_pct)
-                        ssim_results[filename]['ssim_values'].append(ssim_value)
-                        
-                        completed += 1
-                        if completed % 10 == 0 or completed == len(ssim_tasks):
-                            print(f"SSIM progress: {completed}/{len(ssim_tasks)} ({completed/len(ssim_tasks)*100:.1f}%)")
-                            
-                    except Exception as e:
-                        print(f"Error in SSIM calculation: {e}")
-                        completed += 1
-        except Exception as e:
-            print(f"Error in parallel SSIM processing: {e}")
-            print("Falling back to sequential SSIM calculation...")
-            self.calculate_ssim_batch_sequential(results_data)
-            return
-        
-        # Update the original results with SSIM values
-        for result in results_data:
-            if result and result.get('filename') in ssim_results:
-                ssim_data = ssim_results[result['filename']]
-                # Sort by flip percentage to ensure correct order
-                sorted_data = sorted(zip(ssim_data['flip_percentages'], ssim_data['ssim_values']))
-                result['flip_percentages'] = [pct for pct, _ in sorted_data]
-                result['ssim_values'] = [ssim for _, ssim in sorted_data]
-                print(f"Calculated SSIM for {result['filename']}: {len(result['ssim_values'])} values")
-            else:
-                # Ensure we have SSIM values even if parallel processing failed
-                if result and result.get('flip_percentages'):
-                    result['ssim_values'] = [0.0] * len(result['flip_percentages'])
-                    print(f"Using default SSIM values for {result['filename']}: {len(result['ssim_values'])} values")
-    
-    def calculate_ssim_batch_sequential(self, results_data):
-        """
-        Fallback sequential SSIM calculation if parallel processing fails.
-        
-        Args:
-            results_data: List of result dictionaries from parallel processing
-        """
-        print("\n=== Calculating SSIM sequentially (fallback) ===")
+        print("\n=== Calculating SSIM for all processed images ===")
         
         for result in results_data:
             if not result or not result.get('modified_image_paths'):
@@ -902,6 +818,211 @@ class BitFlipAnalyzer:
         # Cleanup
         self.cleanup()
 
+    def _init_fast_ssim(self):
+        """Initialize fast SSIM implementation using PyTorch."""
+        try:
+            import torch
+            import torch.nn.functional as F
+            from torch import nn
+            
+            class FastSSIM(nn.Module):
+                def __init__(self, window_size=11, size_average=True):
+                    super(FastSSIM, self).__init__()
+                    self.window_size = window_size
+                    self.size_average = size_average
+                    self.channel = 1
+                    self.window = self._create_window(window_size, self.channel)
+
+                def _gaussian(self, window_size, sigma):
+                    gauss = torch.Tensor([torch.exp(torch.tensor(-(x - window_size//2)**2/float(2*sigma**2))) for x in range(window_size)])
+                    return gauss/gauss.sum()
+
+                def _create_window(self, window_size, channel):
+                    _1D_window = self._gaussian(window_size, 1.5).unsqueeze(1)
+                    _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
+                    window = _2D_window.expand(channel, 1, window_size, window_size).contiguous()
+                    return window
+
+                def _ssim(self, img1, img2, window, window_size, channel, size_average=True):
+                    mu1 = F.conv2d(img1, window, padding=window_size//2, groups=channel)
+                    mu2 = F.conv2d(img2, window, padding=window_size//2, groups=channel)
+
+                    mu1_sq = mu1.pow(2)
+                    mu2_sq = mu2.pow(2)
+                    mu1_mu2 = mu1 * mu2
+
+                    sigma1_sq = F.conv2d(img1 * img1, window, padding=window_size//2, groups=channel) - mu1_sq
+                    sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size//2, groups=channel) - mu2_sq
+                    sigma12 = F.conv2d(img1 * img2, window, padding=window_size//2, groups=channel) - mu1_mu2
+
+                    C1 = 0.01**2
+                    C2 = 0.03**2
+
+                    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+
+                    if size_average:
+                        return ssim_map.mean()
+                    else:
+                        return ssim_map.mean(1).mean(1).mean(1)
+
+                def forward(self, img1, img2):
+                    (_, channel, _, _) = img1.size()
+
+                    if channel == self.channel and self.window.data.type() == img1.data.type():
+                        window = self.window
+                    else:
+                        window = self._create_window(self.window_size, channel)
+                        
+                        if img1.is_cuda:
+                            window = window.cuda(img1.get_device())
+                        window = window.type_as(img1)
+                        
+                        self.window = window
+                        self.channel = channel
+
+                    return self._ssim(img1, img2, window, self.window_size, channel, self.size_average)
+            
+            return FastSSIM()
+            
+        except ImportError:
+            print("PyTorch not available, falling back to optimized scikit-image SSIM")
+            return None
+    
+    def calculate_ssim_fast_pytorch(self, original_file: Path, modified_file: Path) -> float:
+        """
+        Calculate SSIM using PyTorch for maximum speed.
+        
+        Args:
+            original_file: Path to original file
+            modified_file: Path to modified file
+            
+        Returns:
+            SSIM value (0.0 to 1.0, where 1.0 is identical)
+        """
+        try:
+            import torch
+            import torchvision.transforms as transforms
+            from PIL import Image
+            
+            # Read images with PIL
+            original_img = Image.open(original_file).convert('L')  # Convert to grayscale
+            modified_img = Image.open(modified_file).convert('L')
+            
+            # Ensure same size
+            if original_img.size != modified_img.size:
+                modified_img = modified_img.resize(original_img.size, Image.LANCZOS)
+            
+            # Convert to tensors
+            transform = transforms.ToTensor()
+            original_tensor = transform(original_img).unsqueeze(0)  # Add batch dimension
+            modified_tensor = transform(modified_img).unsqueeze(0)
+            
+            # Calculate SSIM
+            if self.ssim_fn is not None:
+                ssim_value = self.ssim_fn(original_tensor, modified_tensor)
+                return float(ssim_value.item())
+            else:
+                # Fallback to optimized scikit-image
+                return self.calculate_ssim_optimized(original_file, modified_file)
+                
+        except Exception as e:
+            print(f"Error in PyTorch SSIM calculation: {e}")
+            return self.calculate_ssim_optimized(original_file, modified_file)
+    
+    def calculate_ssim_optimized(self, original_file: Path, modified_file: Path) -> float:
+        """
+        Optimized SSIM calculation using scikit-image with better performance.
+        
+        Args:
+            original_file: Path to original file
+            modified_file: Path to modified file
+            
+        Returns:
+            SSIM value (0.0 to 1.0, where 1.0 is identical)
+        """
+        try:
+            # Use PIL for faster image loading
+            from PIL import Image
+            import numpy as np
+            
+            # Read images with PIL (faster than cv2)
+            original_img = Image.open(original_file).convert('L')
+            modified_img = Image.open(modified_file).convert('L')
+            
+            # Ensure same size
+            if original_img.size != modified_img.size:
+                modified_img = modified_img.resize(original_img.size, Image.LANCZOS)
+            
+            # Convert to numpy arrays
+            original_array = np.array(original_img, dtype=np.float32)
+            modified_array = np.array(modified_img, dtype=np.float32)
+            
+            # Calculate SSIM with optimized parameters
+            ssim_value = ssim(original_array, modified_array, 
+                            data_range=255,
+                            gaussian_weights=True,
+                            sigma=1.5,
+                            use_sample_covariance=False,
+                            K1=0.01,
+                            K2=0.03)
+            
+            return float(ssim_value)
+            
+        except Exception as e:
+            print(f"Error in optimized SSIM calculation: {e}")
+            return 0.0
+    
+    def calculate_ssim_ultra_fast(self, original_file: Path, modified_file: Path) -> float:
+        """
+        Ultra-fast SSIM approximation using simple statistics.
+        This is much faster but less accurate than full SSIM.
+        
+        Args:
+            original_file: Path to original file
+            modified_file: Path to modified file
+            
+        Returns:
+            Approximate SSIM value (0.0 to 1.0, where 1.0 is identical)
+        """
+        try:
+            from PIL import Image
+            import numpy as np
+            
+            # Read images with PIL
+            original_img = Image.open(original_file).convert('L')
+            modified_img = Image.open(modified_file).convert('L')
+            
+            # Ensure same size
+            if original_img.size != modified_img.size:
+                modified_img = modified_img.resize(original_img.size, Image.LANCZOS)
+            
+            # Convert to numpy arrays
+            original_array = np.array(original_img, dtype=np.float32)
+            modified_array = np.array(modified_img, dtype=np.float32)
+            
+            # Calculate simple statistics
+            mu1 = np.mean(original_array)
+            mu2 = np.mean(modified_array)
+            
+            sigma1_sq = np.var(original_array)
+            sigma2_sq = np.var(modified_array)
+            sigma12 = np.mean((original_array - mu1) * (modified_array - mu2))
+            
+            # Constants for numerical stability
+            C1 = (0.01 * 255) ** 2
+            C2 = (0.03 * 255) ** 2
+            
+            # Simplified SSIM calculation
+            numerator = (2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)
+            denominator = (mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2)
+            
+            ssim_value = numerator / denominator
+            return float(ssim_value)
+            
+        except Exception as e:
+            print(f"Error in ultra-fast SSIM calculation: {e}")
+            return 0.0
+
 
 def main():
     parser = argparse.ArgumentParser(description='Analyze Bit Flip Impact on CriticalFUSE Non-Critical Files (FUSE)')
@@ -919,6 +1040,11 @@ def main():
                        help='Number of steps between min and max percentage')
     parser.add_argument('--num-processes', type=int, help='Number of processes to use for parallel processing (default: min(CPU_count, 8))')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
+    parser.add_argument('--skip-ssim', action='store_true', help='Skip SSIM calculation entirely')
+    parser.add_argument('--fast-mode', action='store_true', help='Use fewer flip percentages for faster processing')
+    parser.add_argument('--fast-ssim', action='store_true', default=True, help='Use fast SSIM implementation (PyTorch-based, default: True)')
+    parser.add_argument('--ultra-fast-ssim', action='store_true', help='Use ultra-fast SSIM approximation (less accurate but much faster)')
+    parser.add_argument('--cpp-ssim', help='Path to C++ SSIM executable (fastest option)')
     
     args = parser.parse_args()
     
@@ -931,10 +1057,20 @@ def main():
         print(f"Error: BitFlipper executable '{args.bitflipper_path}' does not exist!")
         return 1
     
+    # Handle SSIM mode selection
+    fast_ssim = args.fast_ssim
+    if args.ultra_fast_ssim:
+        fast_ssim = False  # Will use ultra-fast mode in the calculation
+    
     # Create analyzer and run analysis
     analyzer = BitFlipAnalyzer(args.storage_folder, args.bitflipper_path, 
                               args.output_dir, args.test_images, args.output, args.max_test_images, 
-                              args.guetzli_split, args.num_processes)
+                              args.guetzli_split, args.num_processes, args.skip_ssim, args.fast_mode, fast_ssim,
+                              args.cpp_ssim)
+    
+    # Set ultra-fast mode if requested
+    if args.ultra_fast_ssim:
+        analyzer.calculate_ssim = analyzer.calculate_ssim_ultra_fast
     
     try:
         analyzer.run_analysis(flip_range=tuple(args.flip_range), 
