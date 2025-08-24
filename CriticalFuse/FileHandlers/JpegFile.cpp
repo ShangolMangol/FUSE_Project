@@ -1,14 +1,13 @@
-// Full C++ class using libjpeg to split JPEG into AC and critical (DC + headers) parts
-// Requires libjpeg (e.g., libjpeg-turbo)
+// Full C++ class using integrated Guetzli functionality to split JPEG into AC and critical (DC + headers) parts
 
 #include "JpegFile.h"
+#include "../GuetzliSplit/guetzli_buffer.h"
 #include <vector>
 #include <fstream>
 #include <iostream>
 #include <cstring>
 #include <string>
 #include <unistd.h>
-
 
 ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
     std::string basePath(mappingPath);
@@ -18,27 +17,43 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
     }
 
     if (offset == 0) {
-        // save the buffer to a file - temporary file
-        std::ofstream file(basePath, std::ios::binary);
-        file.write(buffer, size);
-        file.close();
+        // Convert buffer to string for Guetzli processing
+        std::string jpeg_data(buffer, size);
+        
+        // Split the JPEG using integrated Guetzli functionality
+        std::string critical_data, noncritical_data;
+        if (!guetzli::SplitJpegBuffer(jpeg_data, critical_data, noncritical_data, basePath)) {
+            std::cerr << "Failed to split JPEG using Guetzli" << std::endl;
+            return ResultCode::FAILURE;
+        }
 
+        // Write critical part to .crit file
+        std::string critPath = basePath + ".crit";
+        std::ofstream critFile(critPath, std::ios::binary);
+        if (!critFile.is_open()) {
+            std::cerr << "Failed to open critical file for writing: " << critPath << std::endl;
+            return ResultCode::FAILURE;
+        }
+        critFile.write(critical_data.data(), critical_data.size());
+        critFile.close();
+
+        // Write non-critical part to .noncrit file
+        std::string noncritPath = basePath + ".noncrit";
+        std::ofstream noncritFile(noncritPath, std::ios::binary);
+        if (!noncritFile.is_open()) {
+            std::cerr << "Failed to open non-critical file for writing: " << noncritPath << std::endl;
+            return ResultCode::FAILURE;
+        }
+        noncritFile.write(noncritical_data.data(), noncritical_data.size());
+        noncritFile.close();
+
+        // Create mapping file with size information
         std::ofstream mappingFile(mappingPath);
         mappingFile << "size: " << size << std::endl;
         mappingFile.close();
 
-        // split the file into .jpg.crit and .jpg.noncrit using GuetzliSplit
-        std::string command = guetzliSplitPath + " --split " + basePath + " " + basePath + ".crit ";
-        std::cout << "Executing split command: " << command << std::endl;
-        char cwd[1024]; getcwd(cwd, sizeof(cwd));
-        std::cout << "Current directory: " << cwd << std::endl;
-        int ret = system(command.c_str());
-        if (ret != 0) {
-            return ResultCode::FAILURE;
-        }
-
-        // remove the temporary file
-        unlink(basePath.c_str());
+        std::cout << "Successfully split JPEG into critical (" << critical_data.size() 
+                  << " bytes) and non-critical (" << noncritical_data.size() << " bytes) parts" << std::endl;
     }
     return ResultCode::SUCCESS;
 }
@@ -49,31 +64,50 @@ ResultCode JpegFileHandler::readFile(const char* mappingPath, char* buffer, size
     if (basePath.size() >= suffix.size() && basePath.compare(basePath.size() - suffix.size(), suffix.size(), suffix) == 0) {
         basePath = basePath.substr(0, basePath.size() - suffix.size());
     }
-    //remove the .jpg from the basePath
-    basePath = basePath.substr(0, basePath.size() - 4);
 
-    // merge the .jpg.crit and .jpg.noncrit files back into a JPEG
-    std::string command = guetzliSplitPath + " --merge " + basePath + ".jpg.crit " + basePath + ".jpg";
-    std::cout << "Executing merge command: " << command << std::endl;
-    char cwd[1024]; getcwd(cwd, sizeof(cwd));
-    std::cout << "Current directory: " << cwd << std::endl;
-    int ret = system(command.c_str());
-    if (ret != 0) {
+    // Read critical part
+    std::string critPath = basePath + ".crit";
+    std::ifstream critFile(critPath, std::ios::binary);
+    if (!critFile.is_open()) {
+        std::cerr << "Failed to open critical file: " << critPath << std::endl;
+        return ResultCode::FAILURE;
+    }
+    std::stringstream critBuffer;
+    critBuffer << critFile.rdbuf();
+    std::string critical_data = critBuffer.str();
+    critFile.close();
+
+    // Read non-critical part
+    std::string noncritPath = basePath + ".noncrit";
+    std::ifstream noncritFile(noncritPath, std::ios::binary);
+    if (!noncritFile.is_open()) {
+        std::cerr << "Failed to open non-critical file: " << noncritPath << std::endl;
+        return ResultCode::FAILURE;
+    }
+    std::stringstream noncritBuffer;
+    noncritBuffer << noncritFile.rdbuf();
+    std::string noncritical_data = noncritBuffer.str();
+    noncritFile.close();
+
+    // Merge the parts using integrated Guetzli functionality
+    std::string jpeg_data;
+    if (!guetzli::MergeJpegBuffer(critical_data, noncritical_data, jpeg_data, basePath)) {
+        std::cerr << "Failed to merge JPEG using Guetzli" << std::endl;
         return ResultCode::FAILURE;
     }
 
-    // read the JPEG file into the buffer
-    std::ifstream mergedImage(basePath + ".jpg", std::ios::binary | std::ios::ate);
-    int mergedImageSize = mergedImage.tellg();
-    mergedImage.seekg(0, std::ios::beg);
-    mergedImage.read(buffer, mergedImageSize);
-    std::cout << "Reading from file: " << basePath + ".jpg" << " with size: " << mergedImageSize << std::endl;
+    // Copy merged data to buffer
+    if (jpeg_data.size() > size) {
+        std::cerr << "Buffer too small for merged JPEG data" << std::endl;
+        return ResultCode::FAILURE;
+    }
+    
+    memcpy(buffer, jpeg_data.data(), jpeg_data.size());
+    size = jpeg_data.size();
 
-    mergedImage.close();
-    size = mergedImageSize;
-
-    // remove the temporary file
-    unlink((basePath + ".jpg").c_str());
+    std::cout << "Successfully merged JPEG from critical (" << critical_data.size() 
+              << " bytes) and non-critical (" << noncritical_data.size() 
+              << " bytes) parts into " << size << " bytes" << std::endl;
 
     return ResultCode::SUCCESS;
 }
