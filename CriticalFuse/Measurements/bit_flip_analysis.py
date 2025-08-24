@@ -21,6 +21,10 @@ Examples:
     python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results \
         --test-images ./TestImages --use-test-images
     
+    # Use only first 5 test images
+    python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper --output-dir ./bitflip_results \
+        --test-images ./TestImages --use-test-images --max-test-images 5
+    
     # Custom flip range
     python3 bit_flip_analysis.py ./storage ./mnt ./BitFlipper -o ./results --flip-range 0.1 5.0
 """
@@ -43,7 +47,7 @@ import cv2
 
 class BitFlipAnalyzer:
     def __init__(self, storage_folder: str, mount_point: str, bitflipper_path: str, output_dir: str, 
-                 test_images_folder: str = None, output_file: str = None):
+                 test_images_folder: str = None, output_file: str = None, max_test_images: int = None):
         """
         Initialize the bit flip analyzer.
         
@@ -61,6 +65,7 @@ class BitFlipAnalyzer:
         self.output_dir = Path(output_dir)
         self.test_images_folder = Path(test_images_folder) if test_images_folder else None
         self.output_file = output_file
+        self.max_test_images = max_test_images
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -73,6 +78,7 @@ class BitFlipAnalyzer:
             'bitflipper_path': str(self.bitflipper_path),
             'output_dir': str(self.output_dir),
             'test_images_folder': str(self.test_images_folder) if self.test_images_folder else None,
+            'max_test_images': self.max_test_images,
             'graphs_dir': str(self.graphs_dir),
             'tests': []
         }
@@ -186,6 +192,12 @@ class BitFlipAnalyzer:
         
         test_images.sort()
         print(f"Found {len(test_images)} test images in {self.test_images_folder}")
+        
+        # Limit the number of test images if specified
+        if self.max_test_images and len(test_images) > self.max_test_images:
+            test_images = test_images[:self.max_test_images]
+            print(f"Limited to {self.max_test_images} test images")
+        
         return test_images
     
     def find_merged_image(self, noncrit_file: Path) -> Path:
@@ -426,7 +438,7 @@ class BitFlipAnalyzer:
         # Wait for FUSE to create the split files (only if we copied a new file)
         if mount_name.startswith("test_"):
             print("Waiting for FUSE to create split files...")
-            time.sleep(5)
+            time.sleep(3)
         
         # Find the corresponding .noncrit file
         noncrit_file = self.storage_folder / f"{mount_name}.noncrit"
@@ -696,6 +708,8 @@ class BitFlipAnalyzer:
         print(f"BitFlipper path: {self.bitflipper_path}")
         if self.test_images_folder:
             print(f"Test images folder: {self.test_images_folder}")
+            if self.max_test_images:
+                print(f"Max test images to analyze: {self.max_test_images}")
         print(f"Flip range: {flip_range[0]:.2f}% to {flip_range[1]:.2f}%")
         print(f"Number of steps: {flip_steps}")
         print(f"Using test images: {use_test_images}")
@@ -755,6 +769,7 @@ def main():
     parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for results')
     parser.add_argument('--test-images', help='Path to folder containing test images to copy to mount point')
     parser.add_argument('--use-test-images', action='store_true', help='Use test images instead of existing .noncrit files')
+    parser.add_argument('--max-test-images', type=int, help='Maximum number of test images to analyze (default: all)')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--flip-range', nargs=2, type=float, default=[0.1, 5.0], 
                        help='Range of bit flip percentages (min max)')
@@ -779,7 +794,7 @@ def main():
     
     # Create analyzer and run analysis
     analyzer = BitFlipAnalyzer(args.storage_folder, args.mount_point, args.bitflipper_path, 
-                              args.output_dir, args.test_images, args.output)
+                              args.output_dir, args.test_images, args.output, args.max_test_images)
     
     try:
         analyzer.run_analysis(flip_range=tuple(args.flip_range), 
