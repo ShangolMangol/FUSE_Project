@@ -166,9 +166,14 @@ bool MergeJpegBuffer(const std::string& critical_data,
         return false;
     }
 
-    // The GuetzliStringOut callback already handles writing to merged_data
-    // No need for additional WriteJpeg call
-    
+    // Write the complete merged JPEG directly to memory
+    if (!WriteJpeg(jpg, false, output, nullptr)) {
+        std::cerr << "Failed to write merged JPEG data to memory" << std::endl;
+        std::remove(crit_file_path.c_str());
+        std::remove(noncrit_file_path.c_str());
+        return false;
+    }
+
     // Copy the merged data to the output parameter
     jpeg_data = merged_data;
 
