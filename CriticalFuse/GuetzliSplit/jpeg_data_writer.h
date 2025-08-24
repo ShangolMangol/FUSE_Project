@@ -62,9 +62,6 @@ struct JPEGOutput {
 bool WriteJpeg(const JPEGData& jpg, bool strip_metadata, JPEGOutput out,
                const SplitMergeOptions* split_merge_opts);
 
-// Helper function to read file to vector
-std::vector<uint8_t> ReadFileToVec(const std::string& path);
-
 // Main function to merge split JPEG files.
 bool MergeCritNoncrit(const std::string& crit_path,
                       const std::string& noncrit_path,

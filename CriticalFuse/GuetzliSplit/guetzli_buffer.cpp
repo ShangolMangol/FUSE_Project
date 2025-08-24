@@ -29,6 +29,17 @@
 #include "quality.h"
 #include "stats.h"
 
+// Helper function to read file to vector (if not already defined)
+std::vector<uint8_t> LoadFileToBuffer(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        return std::vector<uint8_t>();
+    }
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+    return data;
+}
+
 namespace guetzli {
 
 // This callback is used when merging to write to a std::string.
@@ -106,14 +117,8 @@ bool MergeJpegBuffer(const std::string& critical_data,
                      const std::string& noncritical_data, 
                      std::string& jpeg_data,
                      const std::string& base_path) {
-    // Determine the correct extension
-    std::string ext = GetJpegExtension(base_path);
-
-    // Use the existing file paths for the stored files
-    std::string crit_file_path = base_path + ext + ".crit";
-    std::string noncrit_file_path = base_path + ext + ".noncrit";
-
-    // Write critical data to the stored file location
+    // Write critical data to a temporary file for merging
+    std::string crit_file_path = base_path + ".temp_crit";
     std::ofstream crit_file(crit_file_path, std::ios::binary);
     if (!crit_file.is_open()) {
         std::cerr << "Failed to open critical file for writing: " << crit_file_path << std::endl;
@@ -122,50 +127,59 @@ bool MergeJpegBuffer(const std::string& critical_data,
     crit_file.write(critical_data.data(), critical_data.size());
     crit_file.close();
 
-    // Write non-critical data to the stored file location
+    // Write non-critical data to a temporary file for merging
+    std::string noncrit_file_path = base_path + ".temp_noncrit";
     std::ofstream noncrit_file(noncrit_file_path, std::ios::binary);
     if (!noncrit_file.is_open()) {
         std::cerr << "Failed to open non-critical file for writing: " << noncrit_file_path << std::endl;
+        std::remove(crit_file_path.c_str());
         return false;
     }
     noncrit_file.write(noncritical_data.data(), noncritical_data.size());
     noncrit_file.close();
 
-    // Read the critical file (contains DC coefficients and AC symbols)
-    std::vector<uint8_t> crit_vec = ReadFileToVec(crit_file_path);
-    if (crit_vec.empty()) {
-        std::cerr << "Failed to read critical file: " << crit_file_path << std::endl;
-        return false;
-    }
-
-    // Read AC coefficient values from the AC noncrit file
-    std::vector<uint8_t> ac_vec = ReadFileToVec(noncrit_file_path);
-    if (ac_vec.empty()) {
-        std::cerr << "Failed to read AC noncrit file: " << noncrit_file_path << std::endl;
+    // Merge directly to memory using a string buffer
+    std::string merged_data;
+    JPEGOutput output(GuetzliStringOut, &merged_data);
+    
+    // Read the critical file and merge with non-critical data
+    std::vector<uint8_t> crit_vec = LoadFileToBuffer(crit_file_path);
+    std::vector<uint8_t> ac_vec = LoadFileToBuffer(noncrit_file_path);
+    
+    if (crit_vec.empty() || ac_vec.empty()) {
+        std::cerr << "Failed to read temporary files for merging" << std::endl;
+        std::remove(crit_file_path.c_str());
+        std::remove(noncrit_file_path.c_str());
         return false;
     }
 
     JPEGData jpg;
-    // Use the ReadJpeg overload that takes ac_data parameters
-    // This function will read the critical file and use the AC data to reconstruct coefficients
     bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_vec.data()), 
-                                 crit_vec.size(),
-                                 ac_vec.data(), ac_vec.size(),
-                                 JPEG_READ_ALL, &jpg);
+                               crit_vec.size(),
+                               ac_vec.data(), ac_vec.size(),
+                               JPEG_READ_ALL, &jpg);
     
     if (!read_success) {
-        std::cerr << "Failed to parse critical JPEG data from " << crit_file_path << std::endl;
+        std::cerr << "Failed to parse critical JPEG data" << std::endl;
+        std::remove(crit_file_path.c_str());
+        std::remove(noncrit_file_path.c_str());
         return false;
     }
 
-    // Write the complete JPEG directly to memory
-    JPEGOutput output(GuetzliStringOut, &jpeg_data);
-    
-    // Write as a complete JPEG (not split) - pass nullptr for split_merge_opts
+    // Write the complete merged JPEG directly to memory
     if (!WriteJpeg(jpg, false, output, nullptr)) {
-        std::cerr << "Failed to write merged JPEG data." << std::endl;
+        std::cerr << "Failed to write merged JPEG data to memory" << std::endl;
+        std::remove(crit_file_path.c_str());
+        std::remove(noncrit_file_path.c_str());
         return false;
     }
+
+    // Copy the merged data to the output parameter
+    jpeg_data = merged_data;
+
+    // Clean up temporary files
+    std::remove(crit_file_path.c_str());
+    std::remove(noncrit_file_path.c_str());
 
     return true;
 }
