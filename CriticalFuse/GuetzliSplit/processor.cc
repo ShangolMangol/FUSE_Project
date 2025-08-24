@@ -22,7 +22,7 @@
 #include <vector>
 #include <string>
 #include <memory>
-
+#include <cassert>
 
 #include "comparator.h"
 #include "debug_print.h"
@@ -950,11 +950,8 @@ bool Process(const Params& params, ProcessStats* stats,
   GuetzliOutput out_struct;
   ProcessStats dummy_stats;
   if (stats == nullptr) stats = &dummy_stats;
-  std::unique_ptr<ButteraugliComparator> comparator;
-  if (w >= 32 && h >= 32) {
-    comparator.reset(new ButteraugliComparator(w, h, &rgb, params.butteraugli_target, stats));
-  }
-  bool ok = processor.ProcessJpegData(params, jpg, comparator.get(), &out_struct, stats, split_opts);
+  // No butteraugli comparator since we removed that dependency
+  bool ok = processor.ProcessJpegData(params, jpg, nullptr, &out_struct, stats, split_opts);
   *out = out_struct.jpeg_data;
   return ok;
 }
