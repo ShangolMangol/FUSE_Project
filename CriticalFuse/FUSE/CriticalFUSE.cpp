@@ -62,6 +62,14 @@ static void fullpath(char fpath[PATH_MAX], const char *path) {
     }
 }
 
+// Helper to force attribute cache invalidation
+static void invalidate_attributes(const char* path) {
+    // This is a placeholder for FUSE attribute cache invalidation
+    // In a real implementation, you would use FUSE's notification mechanism
+    // For now, we'll rely on the mapping file update to trigger a refresh
+    (void)path; // Suppress unused parameter warning
+}
+
 // Helper to get file handler based on file type
 static std::unique_ptr<AbstractFileHandler> getFileHandler(const char* path) {
     // Get file extension
@@ -402,6 +410,16 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
                         readIt->second.data.clear();
                         std::cout << "Invalidated read buffer after file write" << std::endl;
                     }
+                    
+                    // Force FUSE to refresh file attributes by invalidating the cache
+                    // This will make the file size update immediately in file managers
+                    // We'll use a different approach - update the mapping file with the new size
+                    std::ofstream mappingFile(mappingPath.c_str());
+                    if (mappingFile.is_open()) {
+                        mappingFile << "size:" << it->second.total_size << std::endl;
+                        mappingFile.close();
+                        std::cout << "Updated mapping file with new size: " << it->second.total_size << std::endl;
+                    }
                 } else {
                     std::cerr << "Failed to process file of size: " << it->second.total_size << " bytes" << std::endl;
                 }
@@ -430,6 +448,15 @@ static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
                 ResultCode result = handler->writeFile(mappingPath.c_str(), it->second.data.data(), it->second.total_size, 0);
                 if (result == ResultCode::SUCCESS) {
                     std::cout << "Successfully processed file on flush: " << it->second.total_size << " bytes" << std::endl;
+                    
+                    // Update the mapping file with the new size
+                    std::ofstream mappingFile(mappingPath.c_str());
+                    if (mappingFile.is_open()) {
+                        mappingFile << "size:" << it->second.total_size << std::endl;
+                        mappingFile.close();
+                        std::cout << "Updated mapping file with new size on flush: " << it->second.total_size << std::endl;
+                    }
+                    
                     write_buffers.erase(it); // Clean up buffer after successful processing
                 }
             }
