@@ -678,7 +678,7 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
 //     return 0;
 // }
 
-static int criticalfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+static void* criticalfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
     (void) conn;
     (void) cfg;
     
@@ -686,7 +686,7 @@ static int criticalfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
     fuse_context = fuse_get_context()->fuse;
     std::cout << "FUSE filesystem initialized" << std::endl;
     
-    return 0;
+    return NULL;
 }
 
 static const struct fuse_operations criticalfs_oper = {
