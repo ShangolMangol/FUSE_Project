@@ -114,6 +114,28 @@ class CriticalFUSEPerformanceTester:
             data = f.read()
         return len(data)
     
+    def write_file_with_open_close(self, source_path: Path, dest_path: Path) -> int:
+        """Write a file including open/close operations and return its size."""
+        # First create the file (for FUSE filesystems that need this)
+        try:
+            dest_path.touch(exist_ok=True)
+        except:
+            pass  # Ignore if touch fails
+        
+        # Open, write, and close the file
+        with open(dest_path, 'wb') as f:
+            with open(source_path, 'rb') as src:
+                data = src.read()
+                f.write(data)
+        
+        return dest_path.stat().st_size
+    
+    def read_file_with_open_close(self, file_path: Path) -> int:
+        """Read a file including open/close operations and return its size."""
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        return len(data)
+    
     def test_folder_performance(self, folder_path: Path, jpeg_files: List[Path], folder_type: str) -> Dict:
         """Test read/write performance for a specific folder."""
         print(f"\n=== Testing {folder_type} Folder: {folder_path} ===")
@@ -132,15 +154,15 @@ class CriticalFUSEPerformanceTester:
             print(f"Processing {i}/{len(jpeg_files)}: {jpeg_file.name}")
             
             try:
-                # Measure write time (copy file to test folder)
+                # Measure write time (copy file to test folder with open/close)
                 dest_path = folder_path / jpeg_file.name
                 write_time, write_size = self.measure_file_operation(
-                    self.write_file, jpeg_file, dest_path
+                    self.write_file_with_open_close, jpeg_file, dest_path
                 )
                 
-                # Measure read time (read the copied file)
+                # Measure read time (read the copied file with open/close)
                 read_time, read_size = self.measure_file_operation(
-                    self.read_file, dest_path
+                    self.read_file_with_open_close, dest_path
                 )
                 
                 file_result = {
@@ -164,7 +186,48 @@ class CriticalFUSEPerformanceTester:
                 
             except Exception as e:
                 print(f"  Error processing {jpeg_file.name}: {e}")
-                continue
+                # Try alternative approach for FUSE filesystems
+                try:
+                    print(f"  Trying alternative approach for {jpeg_file.name}...")
+                    
+                    # For FUSE filesystems, try creating the file first
+                    dest_path = folder_path / jpeg_file.name
+                    
+                    # Create empty file first
+                    dest_path.touch(exist_ok=True)
+                    
+                    # Then write data
+                    write_time, write_size = self.measure_file_operation(
+                        self.write_file_with_open_close, jpeg_file, dest_path
+                    )
+                    
+                    # Read data
+                    read_time, read_size = self.measure_file_operation(
+                        self.read_file_with_open_close, dest_path
+                    )
+                    
+                    file_result = {
+                        'filename': jpeg_file.name,
+                        'original_size': jpeg_file.stat().st_size,
+                        'write_size': write_size,
+                        'read_size': read_size,
+                        'write_time': write_time,
+                        'read_time': read_time,
+                        'write_speed_mbps': (write_size / (1024 * 1024)) / write_time if write_time > 0 else 0,
+                        'read_speed_mbps': (read_size / (1024 * 1024)) / read_time if read_time > 0 else 0
+                    }
+                    
+                    test_results['files'].append(file_result)
+                    total_write_time += write_time
+                    total_read_time += read_time
+                    total_size += write_size
+                    
+                    print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
+                    print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
+                    
+                except Exception as e2:
+                    print(f"  Alternative approach also failed: {e2}")
+                    continue
         
         if test_results['files']:
             # Calculate totals
