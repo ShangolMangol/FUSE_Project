@@ -19,7 +19,7 @@
 
 #include <vector>
 
-#include "butteraugli/butteraugli.h"
+#include "butteraugli.h"
 #include "comparator.h"
 #include "jpeg_data.h"
 #include "output_image.h"
