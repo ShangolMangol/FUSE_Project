@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """
-GuetzliSplit Performance Testing Script
+CriticalFUSE Performance Testing Script
 
-This script measures the performance of GuetzliSplit operations for JPEG images,
-including splitting, reading, and merging operations using the --split and --merge flags.
-It generates performance graphs showing split/merge times vs file sizes and includes 
-automatic cleanup functionality. Graphs are automatically saved to a separate directory
-that is never deleted.
+This script compares the performance of file operations between a mounted FUSE folder
+and a regular folder. It measures read and write times for JPEG images and generates
+comparison graphs showing the performance differences.
 
 Usage:
-    python3 jpeg_performance_test.py <source_folder> --output-dir <output_directory> [options]
+    python3 jpeg_performance_test.py <test_images_folder> <regular_folder> <mounted_folder> [options]
 
 Examples:
-    python3 jpeg_performance_test.py ../TestImages/ --output-dir ./guetzli_test
-    python3 jpeg_performance_test.py ../TestImages/ -o ./guetzli_test --output results.json
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ --output-dir ./performance_results
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --output results.json
 """
 
 import os
@@ -31,20 +29,24 @@ import matplotlib.patches as mpatches
 import numpy as np
 
 
-class JPEGPerformanceTester:
-    def __init__(self, source_folder: str, output_dir: str, output_file: str = None):
+class CriticalFUSEPerformanceTester:
+    def __init__(self, test_images_folder: str, regular_folder: str, mounted_folder: str, 
+                 output_dir: str, output_file: str = None):
         """
         Initialize the performance tester.
         
         Args:
-            source_folder: Path to folder containing JPEG images
-            output_dir: Path to output directory for GuetzliSplit operations
+            test_images_folder: Path to folder containing test JPEG images
+            regular_folder: Path to regular folder for comparison
+            mounted_folder: Path to mounted FUSE folder for comparison
+            output_dir: Path to output directory for results
             output_file: Optional path to save results JSON
         """
-        self.source_folder = Path(source_folder)
+        self.test_images_folder = Path(test_images_folder)
+        self.regular_folder = Path(regular_folder)
+        self.mounted_folder = Path(mounted_folder)
         self.output_dir = Path(output_dir)
         self.output_file = output_file
-        self.guetzli_path = Path('/usr/local/bin/GuetzliSplit')
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -52,36 +54,36 @@ class JPEGPerformanceTester:
         
         self.results = {
             'timestamp': datetime.now().isoformat(),
-            'source_folder': str(self.source_folder),
+            'test_images_folder': str(self.test_images_folder),
+            'regular_folder': str(self.regular_folder),
+            'mounted_folder': str(self.mounted_folder),
             'output_dir': str(self.output_dir),
             'graphs_dir': str(self.graphs_dir),
-            'guetzli_path': str(self.guetzli_path),
             'tests': []
         }
         
-        # Ensure output directory exists
+        # Ensure directories exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.regular_folder.mkdir(parents=True, exist_ok=True)
         
-        # Check if GuetzliSplit exists
-        if not self.guetzli_path.exists():
-            print(f"Error: GuetzliSplit not found at {self.guetzli_path}")
-            print("This script requires GuetzliSplit to be installed.")
-            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_path}")
+        # Verify mounted folder exists
+        if not self.mounted_folder.exists():
+            raise FileNotFoundError(f"Mounted folder not found: {self.mounted_folder}")
     
     def find_jpeg_files(self) -> List[Path]:
-        """Find all JPEG files in the source folder."""
+        """Find all JPEG files in the test images folder."""
         jpeg_patterns = ['*.jpg', '*.jpeg', '*.JPG', '*.JPEG']
         jpeg_files = []
         
         for pattern in jpeg_patterns:
-            jpeg_files.extend(self.source_folder.glob(pattern))
-            jpeg_files.extend(self.source_folder.glob(f'**/{pattern}'))
+            jpeg_files.extend(self.test_images_folder.glob(pattern))
+            jpeg_files.extend(self.test_images_folder.glob(f'**/{pattern}'))
         
         # Remove duplicates and sort
         jpeg_files = list(set(jpeg_files))
         jpeg_files.sort()
         
-        print(f"Found {len(jpeg_files)} JPEG files in {self.source_folder}")
+        print(f"Found {len(jpeg_files)} JPEG files in {self.test_images_folder}")
         return jpeg_files
     
     def measure_file_operation(self, operation_func, *args, **kwargs) -> Tuple[float, int]:
@@ -112,124 +114,53 @@ class JPEGPerformanceTester:
             data = f.read()
         return len(data)
     
-    def guetzli_split_file(self, source_path: Path, dest_dir: Path) -> Tuple[int, float]:
-        """Split a file using GuetzliSplit and return the total size and time."""
-        if not self.guetzli_path.exists():
-            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_path}")
-        
-        start_time = time.time()
-        
-        # Create output filename for split operation
-        output_base = dest_dir / source_path.stem
-        
-        # Run GuetzliSplit command with --split flag
-        cmd = [str(self.guetzli_path), "--split", str(source_path), str(output_base)]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
-        
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
-        
-        end_time = time.time()
-        
-        # Calculate total size of split files (.crit and .ac.noncrit)
-        total_size = 0
-        crit_file = output_base.with_suffix('.jpg.crit')
-        noncrit_file = output_base.with_suffix('.jpg.ac.noncrit')
-        
-        if crit_file.exists():
-            total_size += crit_file.stat().st_size
-        if noncrit_file.exists():
-            total_size += noncrit_file.stat().st_size
-        
-        return total_size, end_time - start_time
-    
-    def guetzli_merge_file(self, source_dir: Path, original_filename: str) -> Tuple[int, float]:
-        """Merge split files using GuetzliSplit and return the size and time."""
-        if not self.guetzli_path.exists():
-            raise FileNotFoundError(f"GuetzliSplit not found at {self.guetzli_path}")
-        
-        start_time = time.time()
-        
-        # Create paths for merge operation
-        base_name = Path(original_filename).stem
-        crit_file = source_dir / f"{base_name}.jpg.crit"
-        merged_output = source_dir / f"merged_{original_filename}"
-        
-        # Run GuetzliSplit merge command
-        cmd = [str(self.guetzli_path), "--merge", str(crit_file), str(merged_output)]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
-        
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
-        
-        end_time = time.time()
-        
-        # Get the merged file size
-        if merged_output.exists():
-            return merged_output.stat().st_size, end_time - start_time
-        else:
-            raise FileNotFoundError(f"Merged file not found: {merged_output}")
-    
-
-    
-    def test_guetzli_directory(self, test_dir: Path, jpeg_files: List[Path], test_name: str) -> Dict:
-        """Test GuetzliSplit split/merge performance for a specific directory."""
-        print(f"\n=== Testing {test_name} ===")
+    def test_folder_performance(self, folder_path: Path, jpeg_files: List[Path], folder_type: str) -> Dict:
+        """Test read/write performance for a specific folder."""
+        print(f"\n=== Testing {folder_type} Folder: {folder_path} ===")
         
         test_results = {
-            'directory': str(test_dir),
-            'test_name': test_name,
+            'folder_type': folder_type,
+            'folder_path': str(folder_path),
             'files': []
         }
         
-        total_split_time = 0
-        total_merge_time = 0
+        total_write_time = 0
         total_read_time = 0
         total_size = 0
         
         for i, jpeg_file in enumerate(jpeg_files, 1):
             print(f"Processing {i}/{len(jpeg_files)}: {jpeg_file.name}")
             
-            # Create subdirectory for this file's split operations
-            file_test_dir = test_dir / jpeg_file.stem
-            file_test_dir.mkdir(exist_ok=True)
-            
             try:
-                # Measure split time
-                split_size, split_time = self.guetzli_split_file(jpeg_file, file_test_dir)
-                
-                # Measure read time of critical file (the main split file)
-                base_name = jpeg_file.stem
-                crit_file = file_test_dir / f"{base_name}.jpg.crit"
-                read_time, _ = self.measure_file_operation(
-                    self.read_file, crit_file
+                # Measure write time (copy file to test folder)
+                dest_path = folder_path / jpeg_file.name
+                write_time, write_size = self.measure_file_operation(
+                    self.write_file, jpeg_file, dest_path
                 )
                 
-                # Measure merge time
-                merge_size, merge_time = self.guetzli_merge_file(file_test_dir, jpeg_file.name)
+                # Measure read time (read the copied file)
+                read_time, read_size = self.measure_file_operation(
+                    self.read_file, dest_path
+                )
                 
                 file_result = {
                     'filename': jpeg_file.name,
                     'original_size': jpeg_file.stat().st_size,
-                    'split_size': split_size,
-                    'merge_size': merge_size,
-                    'split_time': split_time,
+                    'write_size': write_size,
+                    'read_size': read_size,
+                    'write_time': write_time,
                     'read_time': read_time,
-                    'merge_time': merge_time,
-                    'split_speed_mbps': (split_size / (1024 * 1024)) / split_time if split_time > 0 else 0,
-                    'read_speed_mbps': (split_size / (1024 * 1024)) / read_time if read_time > 0 else 0,
-                    'merge_speed_mbps': (merge_size / (1024 * 1024)) / merge_time if merge_time > 0 else 0
+                    'write_speed_mbps': (write_size / (1024 * 1024)) / write_time if write_time > 0 else 0,
+                    'read_speed_mbps': (read_size / (1024 * 1024)) / read_time if read_time > 0 else 0
                 }
                 
                 test_results['files'].append(file_result)
-                total_split_time += split_time
-                total_merge_time += merge_time
+                total_write_time += write_time
                 total_read_time += read_time
-                total_size += split_size
+                total_size += write_size
                 
-                print(f"  Split: {split_time:.4f}s ({file_result['split_speed_mbps']:.2f} MB/s)")
+                print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
                 print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
-                print(f"  Merge: {merge_time:.4f}s ({file_result['merge_speed_mbps']:.2f} MB/s)")
                 
             except Exception as e:
                 print(f"  Error processing {jpeg_file.name}: {e}")
@@ -240,23 +171,19 @@ class JPEGPerformanceTester:
             test_results['summary'] = {
                 'total_files': len(test_results['files']),
                 'total_size_mb': total_size / (1024 * 1024),
-                'total_split_time': total_split_time,
+                'total_write_time': total_write_time,
                 'total_read_time': total_read_time,
-                'total_merge_time': total_merge_time,
-                'avg_split_speed_mbps': (total_size / (1024 * 1024)) / total_split_time if total_split_time > 0 else 0,
-                'avg_read_speed_mbps': (total_size / (1024 * 1024)) / total_read_time if total_read_time > 0 else 0,
-                'avg_merge_speed_mbps': (total_size / (1024 * 1024)) / total_merge_time if total_merge_time > 0 else 0
+                'avg_write_speed_mbps': (total_size / (1024 * 1024)) / total_write_time if total_write_time > 0 else 0,
+                'avg_read_speed_mbps': (total_size / (1024 * 1024)) / total_read_time if total_read_time > 0 else 0
             }
             
-            print(f"\n{test_name} Summary:")
+            print(f"\n{folder_type} Summary:")
             print(f"  Total files: {test_results['summary']['total_files']}")
             print(f"  Total size: {test_results['summary']['total_size_mb']:.2f} MB")
-            print(f"  Total split time: {total_split_time:.4f}s")
+            print(f"  Total write time: {total_write_time:.4f}s")
             print(f"  Total read time: {total_read_time:.4f}s")
-            print(f"  Total merge time: {total_merge_time:.4f}s")
-            print(f"  Avg split speed: {test_results['summary']['avg_split_speed_mbps']:.2f} MB/s")
+            print(f"  Avg write speed: {test_results['summary']['avg_write_speed_mbps']:.2f} MB/s")
             print(f"  Avg read speed: {test_results['summary']['avg_read_speed_mbps']:.2f} MB/s")
-            print(f"  Avg merge speed: {test_results['summary']['avg_merge_speed_mbps']:.2f} MB/s")
         
         return test_results
     
@@ -265,185 +192,234 @@ class JPEGPerformanceTester:
         print("\n=== Cleaning up ===")
         
         try:
-            if self.output_dir.exists():
-                shutil.rmtree(self.output_dir)
-                print(f"Removed test directory: {self.output_dir}")
+            if self.regular_folder.exists():
+                shutil.rmtree(self.regular_folder)
+                print(f"Removed regular test directory: {self.regular_folder}")
                 
-            # Note: Graphs directory is preserved and never deleted
+            # Note: Mounted folder and graphs directory are preserved
             print(f"Graphs preserved in: {self.graphs_dir}")
+            print(f"Mounted folder preserved: {self.mounted_folder}")
                 
         except Exception as e:
             print(f"Warning: Could not clean up directory: {e}")
     
-    def create_performance_graphs(self, test_results: Dict):
-        """Create performance graphs for split/merge times vs file sizes."""
-        if not test_results.get('files'):
+    def create_comparison_graphs(self, regular_results: Dict, mounted_results: Dict):
+        """Create comparison graphs between regular and mounted folder performance."""
+        if not regular_results.get('files') or not mounted_results.get('files'):
             print("No data available for graph generation")
             return
         
         # Extract data for plotting
         file_sizes = []
-        split_times = []
-        merge_times = []
-        read_times = []
+        regular_write_times = []
+        regular_read_times = []
+        mounted_write_times = []
+        mounted_read_times = []
         filenames = []
         
-        for file_result in test_results['files']:
+        # Create a mapping of filenames to results for comparison
+        regular_map = {f['filename']: f for f in regular_results['files']}
+        mounted_map = {f['filename']: f for f in mounted_results['files']}
+        
+        # Find common files
+        common_files = set(regular_map.keys()) & set(mounted_map.keys())
+        
+        for filename in sorted(common_files):
+            regular_file = regular_map[filename]
+            mounted_file = mounted_map[filename]
+            
             # Convert file sizes to MB for better readability
-            size_mb = file_result['original_size'] / (1024 * 1024)
+            size_mb = regular_file['original_size'] / (1024 * 1024)
             file_sizes.append(size_mb)
-            split_times.append(file_result['split_time'])
-            merge_times.append(file_result['merge_time'])
-            read_times.append(file_result['read_time'])
-            filenames.append(file_result['filename'])
+            regular_write_times.append(regular_file['write_time'])
+            regular_read_times.append(regular_file['read_time'])
+            mounted_write_times.append(mounted_file['write_time'])
+            mounted_read_times.append(mounted_file['read_time'])
+            filenames.append(filename)
         
         # Create figure with subplots
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-        fig.suptitle('GuetzliSplit Performance Analysis', fontsize=16, fontweight='bold')
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('CriticalFUSE vs Regular Filesystem Performance Comparison', fontsize=16, fontweight='bold')
         
-        # Plot 1: Split Time vs File Size
-        ax1.scatter(file_sizes, split_times, alpha=0.7, s=50, color='blue', edgecolors='black')
+        # Plot 1: Write Time Comparison
+        ax1.scatter(file_sizes, regular_write_times, alpha=0.7, s=50, color='blue', 
+                   label='Regular Filesystem', edgecolors='black')
+        ax1.scatter(file_sizes, mounted_write_times, alpha=0.7, s=50, color='red', 
+                   label='CriticalFUSE', edgecolors='black')
         ax1.set_xlabel('File Size (MB)', fontsize=12)
-        ax1.set_ylabel('Split Time (seconds)', fontsize=12)
-        ax1.set_title('Split Time vs File Size', fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Write Time (seconds)', fontsize=12)
+        ax1.set_title('Write Time Comparison', fontsize=14, fontweight='bold')
         ax1.grid(True, alpha=0.3)
+        ax1.legend()
         
-        # Add trend line for split times
-        if len(file_sizes) > 1:
-            z = np.polyfit(file_sizes, split_times, 1)
-            p = np.poly1d(z)
-            ax1.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=2)
-            ax1.text(0.05, 0.95, f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}', 
-                    transform=ax1.transAxes, fontsize=10, 
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
-        
-        # Plot 2: Merge Time vs File Size
-        ax2.scatter(file_sizes, merge_times, alpha=0.7, s=50, color='green', edgecolors='black')
+        # Plot 2: Read Time Comparison
+        ax2.scatter(file_sizes, regular_read_times, alpha=0.7, s=50, color='blue', 
+                   label='Regular Filesystem', edgecolors='black')
+        ax2.scatter(file_sizes, mounted_read_times, alpha=0.7, s=50, color='red', 
+                   label='CriticalFUSE', edgecolors='black')
         ax2.set_xlabel('File Size (MB)', fontsize=12)
-        ax2.set_ylabel('Merge Time (seconds)', fontsize=12)
-        ax2.set_title('Merge Time vs File Size', fontsize=14, fontweight='bold')
+        ax2.set_ylabel('Read Time (seconds)', fontsize=12)
+        ax2.set_title('Read Time Comparison', fontsize=14, fontweight='bold')
         ax2.grid(True, alpha=0.3)
+        ax2.legend()
         
-        # Add trend line for merge times
-        if len(file_sizes) > 1:
-            z = np.polyfit(file_sizes, merge_times, 1)
-            p = np.poly1d(z)
-            ax2.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=2)
-            ax2.text(0.05, 0.95, f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}', 
-                    transform=ax2.transAxes, fontsize=10, 
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        # Plot 3: Write Speed Comparison
+        regular_write_speeds = [(size * 1024 * 1024) / time if time > 0 else 0 
+                               for size, time in zip(file_sizes, regular_write_times)]
+        mounted_write_speeds = [(size * 1024 * 1024) / time if time > 0 else 0 
+                               for size, time in zip(file_sizes, mounted_write_times)]
         
-        # Plot 3: Read Time vs File Size
-        ax3.scatter(file_sizes, read_times, alpha=0.7, s=50, color='orange', edgecolors='black')
+        ax3.scatter(file_sizes, regular_write_speeds, alpha=0.7, s=50, color='blue', 
+                   label='Regular Filesystem', edgecolors='black')
+        ax3.scatter(file_sizes, mounted_write_speeds, alpha=0.7, s=50, color='red', 
+                   label='CriticalFUSE', edgecolors='black')
         ax3.set_xlabel('File Size (MB)', fontsize=12)
-        ax3.set_ylabel('Read Time (seconds)', fontsize=12)
-        ax3.set_title('Read Time vs File Size', fontsize=14, fontweight='bold')
+        ax3.set_ylabel('Write Speed (MB/s)', fontsize=12)
+        ax3.set_title('Write Speed Comparison', fontsize=14, fontweight='bold')
         ax3.grid(True, alpha=0.3)
+        ax3.legend()
         
-        # Add trend line for read times
-        if len(file_sizes) > 1:
-            z = np.polyfit(file_sizes, read_times, 1)
-            p = np.poly1d(z)
-            ax3.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=2)
-            ax3.text(0.05, 0.95, f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}', 
-                    transform=ax3.transAxes, fontsize=10, 
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        # Plot 4: Read Speed Comparison
+        regular_read_speeds = [(size * 1024 * 1024) / time if time > 0 else 0 
+                              for size, time in zip(file_sizes, regular_read_times)]
+        mounted_read_speeds = [(size * 1024 * 1024) / time if time > 0 else 0 
+                              for size, time in zip(file_sizes, mounted_read_times)]
+        
+        ax4.scatter(file_sizes, regular_read_speeds, alpha=0.7, s=50, color='blue', 
+                   label='Regular Filesystem', edgecolors='black')
+        ax4.scatter(file_sizes, mounted_read_speeds, alpha=0.7, s=50, color='red', 
+                   label='CriticalFUSE', edgecolors='black')
+        ax4.set_xlabel('File Size (MB)', fontsize=12)
+        ax4.set_ylabel('Read Speed (MB/s)', fontsize=12)
+        ax4.set_title('Read Speed Comparison', fontsize=14, fontweight='bold')
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
         
         # Adjust layout and save
         plt.tight_layout()
         
-        # Save the combined graph
-        graph_path = self.graphs_dir / "performance_analysis.png"
+        # Save the combined comparison graph
+        graph_path = self.graphs_dir / "performance_comparison.png"
         plt.savefig(graph_path, dpi=300, bbox_inches='tight')
-        print(f"Performance graphs saved to: {graph_path}")
+        print(f"Performance comparison graphs saved to: {graph_path}")
         
-        # Create individual graphs for better detail
-        self.create_individual_graphs(file_sizes, split_times, merge_times, read_times, filenames)
+        # Create detailed individual comparison graphs
+        self.create_detailed_comparison_graphs(file_sizes, regular_write_times, regular_read_times,
+                                             mounted_write_times, mounted_read_times, filenames)
         
         plt.close()
     
-    def create_individual_graphs(self, file_sizes, split_times, merge_times, read_times, filenames):
-        """Create individual detailed graphs for each operation type."""
+    def create_detailed_comparison_graphs(self, file_sizes, regular_write_times, regular_read_times,
+                                        mounted_write_times, mounted_read_times, filenames):
+        """Create detailed individual comparison graphs."""
         
-        # Individual Split Time Graph
-        plt.figure(figsize=(12, 8))
-        plt.scatter(file_sizes, split_times, alpha=0.8, s=80, color='blue', edgecolors='black')
+        # Write Time Comparison (Detailed)
+        plt.figure(figsize=(14, 8))
+        plt.scatter(file_sizes, regular_write_times, alpha=0.8, s=80, color='blue', 
+                   label='Regular Filesystem', edgecolors='black')
+        plt.scatter(file_sizes, mounted_write_times, alpha=0.8, s=80, color='red', 
+                   label='CriticalFUSE', edgecolors='black')
         
-        # Add trend line
+        # Add trend lines
         if len(file_sizes) > 1:
-            z = np.polyfit(file_sizes, split_times, 1)
-            p = np.poly1d(z)
-            plt.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=3, label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
-        
-        # Add file labels for some points (avoid overcrowding)
-        for i, filename in enumerate(filenames):
-            if i % max(1, len(filenames) // 8) == 0:  # Show ~8 labels
-                plt.annotate(filename, (file_sizes[i], split_times[i]), 
-                           xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
-        
-        plt.xlabel('File Size (MB)', fontsize=14)
-        plt.ylabel('Split Time (seconds)', fontsize=14)
-        plt.title('GuetzliSplit: Split Time vs File Size', fontsize=16, fontweight='bold')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        
-        split_graph_path = self.graphs_dir / "split_time_analysis.png"
-        plt.savefig(split_graph_path, dpi=300, bbox_inches='tight')
-        print(f"Split time graph saved to: {split_graph_path}")
-        plt.close()
-        
-        # Individual Merge Time Graph
-        plt.figure(figsize=(12, 8))
-        plt.scatter(file_sizes, merge_times, alpha=0.8, s=80, color='green', edgecolors='black')
-        
-        # Add trend line
-        if len(file_sizes) > 1:
-            z = np.polyfit(file_sizes, merge_times, 1)
-            p = np.poly1d(z)
-            plt.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=3, label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
+            z_regular = np.polyfit(file_sizes, regular_write_times, 1)
+            p_regular = np.poly1d(z_regular)
+            plt.plot(file_sizes, p_regular(file_sizes), "b--", alpha=0.8, linewidth=2, 
+                    label=f'Regular Trend: y = {z_regular[0]:.4f}x + {z_regular[1]:.4f}')
+            
+            z_mounted = np.polyfit(file_sizes, mounted_write_times, 1)
+            p_mounted = np.poly1d(z_mounted)
+            plt.plot(file_sizes, p_mounted(file_sizes), "r--", alpha=0.8, linewidth=2, 
+                    label=f'CriticalFUSE Trend: y = {z_mounted[0]:.4f}x + {z_mounted[1]:.4f}')
         
         # Add file labels for some points
         for i, filename in enumerate(filenames):
-            if i % max(1, len(filenames) // 8) == 0:  # Show ~8 labels
-                plt.annotate(filename, (file_sizes[i], merge_times[i]), 
+            if i % max(1, len(filenames) // 6) == 0:  # Show ~6 labels
+                plt.annotate(filename, (file_sizes[i], max(regular_write_times[i], mounted_write_times[i])), 
                            xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
         
         plt.xlabel('File Size (MB)', fontsize=14)
-        plt.ylabel('Merge Time (seconds)', fontsize=14)
-        plt.title('GuetzliSplit: Merge Time vs File Size', fontsize=16, fontweight='bold')
+        plt.ylabel('Write Time (seconds)', fontsize=14)
+        plt.title('CriticalFUSE vs Regular Filesystem: Write Time Comparison', fontsize=16, fontweight='bold')
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        merge_graph_path = self.graphs_dir / "merge_time_analysis.png"
-        plt.savefig(merge_graph_path, dpi=300, bbox_inches='tight')
-        print(f"Merge time graph saved to: {merge_graph_path}")
+        write_graph_path = self.graphs_dir / "write_time_comparison.png"
+        plt.savefig(write_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Write time comparison graph saved to: {write_graph_path}")
         plt.close()
         
-        # Individual Read Time Graph
-        plt.figure(figsize=(12, 8))
-        plt.scatter(file_sizes, read_times, alpha=0.8, s=80, color='orange', edgecolors='black')
+        # Read Time Comparison (Detailed)
+        plt.figure(figsize=(14, 8))
+        plt.scatter(file_sizes, regular_read_times, alpha=0.8, s=80, color='blue', 
+                   label='Regular Filesystem', edgecolors='black')
+        plt.scatter(file_sizes, mounted_read_times, alpha=0.8, s=80, color='red', 
+                   label='CriticalFUSE', edgecolors='black')
         
-        # Add trend line
+        # Add trend lines
         if len(file_sizes) > 1:
-            z = np.polyfit(file_sizes, read_times, 1)
-            p = np.poly1d(z)
-            plt.plot(file_sizes, p(file_sizes), "r--", alpha=0.8, linewidth=3, label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
+            z_regular = np.polyfit(file_sizes, regular_read_times, 1)
+            p_regular = np.poly1d(z_regular)
+            plt.plot(file_sizes, p_regular(file_sizes), "b--", alpha=0.8, linewidth=2, 
+                    label=f'Regular Trend: y = {z_regular[0]:.4f}x + {z_regular[1]:.4f}')
+            
+            z_mounted = np.polyfit(file_sizes, mounted_read_times, 1)
+            p_mounted = np.poly1d(z_mounted)
+            plt.plot(file_sizes, p_mounted(file_sizes), "r--", alpha=0.8, linewidth=2, 
+                    label=f'CriticalFUSE Trend: y = {z_mounted[0]:.4f}x + {z_mounted[1]:.4f}')
         
         # Add file labels for some points
         for i, filename in enumerate(filenames):
-            if i % max(1, len(filenames) // 8) == 0:  # Show ~8 labels
-                plt.annotate(filename, (file_sizes[i], read_times[i]), 
+            if i % max(1, len(filenames) // 6) == 0:  # Show ~6 labels
+                plt.annotate(filename, (file_sizes[i], max(regular_read_times[i], mounted_read_times[i])), 
                            xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
         
         plt.xlabel('File Size (MB)', fontsize=14)
         plt.ylabel('Read Time (seconds)', fontsize=14)
-        plt.title('GuetzliSplit: Read Time vs File Size', fontsize=16, fontweight='bold')
+        plt.title('CriticalFUSE vs Regular Filesystem: Read Time Comparison', fontsize=16, fontweight='bold')
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        read_graph_path = self.graphs_dir / "read_time_analysis.png"
+        read_graph_path = self.graphs_dir / "read_time_comparison.png"
         plt.savefig(read_graph_path, dpi=300, bbox_inches='tight')
-        print(f"Read time graph saved to: {read_graph_path}")
+        print(f"Read time comparison graph saved to: {read_graph_path}")
+        plt.close()
+        
+        # Performance Overhead Analysis
+        plt.figure(figsize=(14, 8))
+        
+        # Calculate overhead percentages
+        write_overhead = [(mounted - regular) / regular * 100 if regular > 0 else 0 
+                         for regular, mounted in zip(regular_write_times, mounted_write_times)]
+        read_overhead = [(mounted - regular) / regular * 100 if regular > 0 else 0 
+                        for regular, mounted in zip(regular_read_times, mounted_read_times)]
+        
+        plt.scatter(file_sizes, write_overhead, alpha=0.8, s=80, color='red', 
+                   label='Write Overhead', edgecolors='black')
+        plt.scatter(file_sizes, read_overhead, alpha=0.8, s=80, color='blue', 
+                   label='Read Overhead', edgecolors='black')
+        
+        # Add trend lines for overhead
+        if len(file_sizes) > 1:
+            z_write = np.polyfit(file_sizes, write_overhead, 1)
+            p_write = np.poly1d(z_write)
+            plt.plot(file_sizes, p_write(file_sizes), "r--", alpha=0.8, linewidth=2, 
+                    label=f'Write Overhead Trend: y = {z_write[0]:.2f}x + {z_write[1]:.2f}%')
+            
+            z_read = np.polyfit(file_sizes, read_overhead, 1)
+            p_read = np.poly1d(z_read)
+            plt.plot(file_sizes, p_read(file_sizes), "b--", alpha=0.8, linewidth=2, 
+                    label=f'Read Overhead Trend: y = {z_read[0]:.2f}x + {z_read[1]:.2f}%')
+        
+        plt.xlabel('File Size (MB)', fontsize=14)
+        plt.ylabel('Performance Overhead (%)', fontsize=14)
+        plt.title('CriticalFUSE Performance Overhead Analysis', fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        overhead_graph_path = self.graphs_dir / "performance_overhead.png"
+        plt.savefig(overhead_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Performance overhead graph saved to: {overhead_graph_path}")
         plt.close()
     
     def save_results(self):
@@ -458,26 +434,32 @@ class JPEGPerformanceTester:
     
     def run_tests(self):
         """Run all performance tests."""
-        print("=== GuetzliSplit Performance Testing ===")
-        print(f"Source folder: {self.source_folder}")
-        print(f"Output directory: {self.output_dir}")
-        print(f"GuetzliSplit path: {self.guetzli_path}")
+        print("=== CriticalFUSE Performance Testing ===")
+        print(f"Test images folder: {self.test_images_folder}")
+        print(f"Regular folder: {self.regular_folder}")
+        print(f"Mounted folder: {self.mounted_folder}")
         
         # Find JPEG files
         jpeg_files = self.find_jpeg_files()
         
         if not jpeg_files:
-            print("No JPEG files found in the source folder!")
+            print("No JPEG files found in the test images folder!")
             return
         
-        # Test GuetzliSplit operations
-        guetzli_results = self.test_guetzli_directory(self.output_dir, jpeg_files, "GuetzliSplit Operations")
-        if guetzli_results:
-            self.results['tests'].append(guetzli_results)
-            
-            # Generate performance graphs
-            print("\n=== Generating Performance Graphs ===")
-            self.create_performance_graphs(guetzli_results)
+        # Test regular folder performance
+        regular_results = self.test_folder_performance(self.regular_folder, jpeg_files, "Regular Filesystem")
+        if regular_results:
+            self.results['tests'].append(regular_results)
+        
+        # Test mounted folder performance
+        mounted_results = self.test_folder_performance(self.mounted_folder, jpeg_files, "CriticalFUSE")
+        if mounted_results:
+            self.results['tests'].append(mounted_results)
+        
+        # Generate comparison graphs
+        if regular_results and mounted_results:
+            print("\n=== Generating Performance Comparison Graphs ===")
+            self.create_comparison_graphs(regular_results, mounted_results)
         
         # Save results
         self.save_results()
@@ -489,28 +471,35 @@ class JPEGPerformanceTester:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Test GuetzliSplit performance for JPEG images')
-    parser.add_argument('source_folder', help='Path to folder containing JPEG images')
-    parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for GuetzliSplit operations')
+    parser = argparse.ArgumentParser(description='Compare CriticalFUSE vs Regular Filesystem Performance')
+    parser.add_argument('test_images_folder', help='Path to folder containing test JPEG images')
+    parser.add_argument('regular_folder', help='Path to regular folder for comparison')
+    parser.add_argument('mounted_folder', help='Path to mounted FUSE folder for comparison')
+    parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for results')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
     
     args = parser.parse_args()
     
-    # Validate source folder
-    if not os.path.exists(args.source_folder):
-        print(f"Error: Source folder '{args.source_folder}' does not exist!")
+    # Validate folders
+    if not os.path.exists(args.test_images_folder):
+        print(f"Error: Test images folder '{args.test_images_folder}' does not exist!")
+        return 1
+    
+    if not os.path.exists(args.mounted_folder):
+        print(f"Error: Mounted folder '{args.mounted_folder}' does not exist!")
         return 1
     
     # Create tester and run tests
-    tester = JPEGPerformanceTester(args.source_folder, args.output_dir, args.output)
+    tester = CriticalFUSEPerformanceTester(args.test_images_folder, args.regular_folder, 
+                                          args.mounted_folder, args.output_dir, args.output)
     
     try:
         tester.run_tests()
         
         if args.no_cleanup:
             print("\nSkipping cleanup as requested.")
-            print(f"Test files remain in: {tester.output_dir}")
+            print(f"Test files remain in: {tester.regular_folder}")
         else:
             tester.cleanup()
             
