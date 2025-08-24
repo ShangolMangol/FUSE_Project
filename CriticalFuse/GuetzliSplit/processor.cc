@@ -23,7 +23,7 @@
 #include <string>
 #include <memory>
 
-#include "butteraugli_comparator.h"
+
 #include "comparator.h"
 #include "debug_print.h"
 #include "fast_log.h"
