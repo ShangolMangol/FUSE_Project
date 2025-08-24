@@ -7,6 +7,7 @@
 #include <iostream>
 #include <cstring>
 #include <string>
+#include <sstream>
 #include <unistd.h>
 
 ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffer, size_t size, off_t offset) {
