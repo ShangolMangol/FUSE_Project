@@ -47,17 +47,12 @@ import numpy as np
 from skimage.metrics import structural_similarity as ssim
 from skimage import io
 import cv2
-import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import pickle
 
 
 class BitFlipAnalyzer:
     def __init__(self, storage_folder: str, bitflipper_path: str, output_dir: str, 
                  test_images_folder: str = None, output_file: str = None, max_test_images: int = None,
-                 guetzli_split_path: str = "/usr/local/bin/GuetzliSplit", num_processes: int = None,
-                 skip_ssim: bool = False, fast_mode: bool = False, fast_ssim: bool = True,
-                 cpp_ssim_path: str = None):
+                 guetzli_split_path: str = "/usr/local/bin/GuetzliSplit"):
         """
         Initialize the bit flip analyzer.
         
@@ -67,11 +62,6 @@ class BitFlipAnalyzer:
             output_dir: Path to output directory for results
             test_images_folder: Path to folder containing test images to copy to mount point
             output_file: Optional path to save results JSON
-            num_processes: Number of processes to use for parallel processing
-            skip_ssim: Skip SSIM calculation entirely
-            fast_mode: Use fewer flip percentages for faster processing
-            fast_ssim: Use fast SSIM implementation (PyTorch-based)
-            cpp_ssim_path: Path to C++ SSIM executable (fastest option)
         """
         self.storage_folder = Path(storage_folder)
         self.bitflipper_path = Path(bitflipper_path)
@@ -80,24 +70,10 @@ class BitFlipAnalyzer:
         self.output_file = output_file
         self.max_test_images = max_test_images
         self.guetzli_split_path = Path(guetzli_split_path)
-        self.num_processes = num_processes or min(mp.cpu_count(), 8)  # Limit to 8 processes max
-        self.skip_ssim = skip_ssim
-        self.fast_mode = fast_mode
-        self.fast_ssim = fast_ssim
-        self.cpp_ssim_path = Path(cpp_ssim_path) if cpp_ssim_path else None
-        
-        # Initialize fast SSIM if available
-        self.ssim_fn = None
-        if self.fast_ssim and not self.cpp_ssim_path:
-            self.ssim_fn = self._init_fast_ssim()
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
         self.graphs_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create temporary directories for parallel processing
-        self.temp_dir = self.output_dir / "temp"
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
         
         self.results = {
             'timestamp': datetime.now().isoformat(),
@@ -108,11 +84,6 @@ class BitFlipAnalyzer:
             'test_images_folder': str(self.test_images_folder) if self.test_images_folder else None,
             'max_test_images': self.max_test_images,
             'graphs_dir': str(self.graphs_dir),
-            'num_processes': self.num_processes,
-            'skip_ssim': self.skip_ssim,
-            'fast_mode': self.fast_mode,
-            'fast_ssim': self.fast_ssim,
-            'cpp_ssim_path': str(self.cpp_ssim_path) if self.cpp_ssim_path else None,
             'tests': []
         }
         
@@ -147,6 +118,8 @@ class BitFlipAnalyzer:
         print(f"Found {len(noncrit_files)} .ac.noncrit files in {self.storage_folder}")
         return noncrit_files
     
+
+    
     def split_image_with_guetzli(self, input_image: Path, output_base: Path) -> bool:
         """
         Split an image using GuetzliSplit executable.
@@ -161,6 +134,7 @@ class BitFlipAnalyzer:
         try:
             # GuetzliSplit command: GuetzliSplit --split input_image output_base
             cmd = [str(self.guetzli_split_path), "--split", str(input_image), str(output_base)]
+            print(f"Running GuetzliSplit split command: {' '.join(cmd)}")
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             
@@ -168,6 +142,7 @@ class BitFlipAnalyzer:
                 print(f"GuetzliSplit failed: {result.stderr}")
                 return False
             
+            print(f"GuetzliSplit split successful")
             return True
             
         except subprocess.TimeoutExpired:
@@ -191,6 +166,7 @@ class BitFlipAnalyzer:
         try:
             # GuetzliSplit command: GuetzliSplit --merge crit_file output_image
             cmd = [str(self.guetzli_split_path), "--merge", str(crit_file), str(output_image)]
+            print(f"Running GuetzliSplit merge command: {' '.join(cmd)}")
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             
@@ -198,6 +174,7 @@ class BitFlipAnalyzer:
                 print(f"GuetzliSplit merge failed: {result.stderr}")
                 return False
             
+            print(f"GuetzliSplit merge successful")
             return True
             
         except subprocess.TimeoutExpired:
@@ -230,6 +207,8 @@ class BitFlipAnalyzer:
         
         return test_images
     
+
+    
     def run_bitflipper(self, input_file: Path, flip_percentage: float) -> bool:
         """
         Run BitFlipper executable to introduce bit flips in-place.
@@ -248,8 +227,13 @@ class BitFlipAnalyzer:
                 dst.write(src.read())
             
             # Run BitFlipper command in random mode (-r)
+            # Use absolute path to ensure it's found
             bitflipper_abs_path = self.bitflipper_path.absolute()
             cmd = [str(bitflipper_abs_path), "-r", str(flip_percentage), str(input_file)]
+            print(f"Running command: {' '.join(cmd)}")
+            print(f"Current working directory: {os.getcwd()}")
+            print(f"BitFlipper path exists: {self.bitflipper_path.exists()}")
+            print(f"BitFlipper absolute path: {bitflipper_abs_path}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode != 0:
@@ -278,9 +262,9 @@ class BitFlipAnalyzer:
                     dst.write(src.read())
             return False
     
-    def calculate_ssim_cpp(self, original_file: Path, modified_file: Path) -> float:
+    def calculate_ssim(self, original_file: Path, modified_file: Path) -> float:
         """
-        Calculate SSIM using external C++ executable (fastest option).
+        Calculate SSIM between original and modified files.
         
         Args:
             original_file: Path to original file
@@ -290,172 +274,62 @@ class BitFlipAnalyzer:
             SSIM value (0.0 to 1.0, where 1.0 is identical)
         """
         try:
-            if not self.cpp_ssim_path or not self.cpp_ssim_path.exists():
-                print(f"C++ SSIM executable not found at {self.cpp_ssim_path}")
-                return self.calculate_ssim_optimized(original_file, modified_file)
+            # Read images
+            original_img = cv2.imread(str(original_file))
+            modified_img = cv2.imread(str(modified_file))
             
-            # Run C++ SSIM executable
-            cmd = [str(self.cpp_ssim_path), str(original_file), str(modified_file), "1"]  # Use windowed SSIM
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if original_img is None or modified_img is None:
+                print(f"Could not read images: {original_file} or {modified_file}")
+                return 0.0
             
-            if result.returncode != 0:
-                print(f"C++ SSIM failed: {result.stderr}")
-                return self.calculate_ssim_optimized(original_file, modified_file)
+            # Convert to grayscale for SSIM calculation
+            original_gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+            modified_gray = cv2.cvtColor(modified_img, cv2.COLOR_BGR2GRAY)
             
-            # Parse output
-            try:
-                ssim_value = float(result.stdout.strip())
-                return ssim_value
-            except ValueError:
-                print(f"Invalid SSIM output: {result.stdout}")
-                return self.calculate_ssim_optimized(original_file, modified_file)
-                
-        except subprocess.TimeoutExpired:
-            print(f"C++ SSIM timed out for {original_file}")
-            return self.calculate_ssim_optimized(original_file, modified_file)
+            # Ensure same size
+            if original_gray.shape != modified_gray.shape:
+                # Resize modified image to match original
+                modified_gray = cv2.resize(modified_gray, (original_gray.shape[1], original_gray.shape[0]))
+            
+            # Calculate SSIM
+            ssim_value = ssim(original_gray, modified_gray)
+            return ssim_value
+            
         except Exception as e:
-            print(f"Error running C++ SSIM: {e}")
-            return self.calculate_ssim_optimized(original_file, modified_file)
+            print(f"Error calculating SSIM: {e}")
+            return 0.0
     
-    def calculate_ssim(self, original_file: Path, modified_file: Path) -> float:
+
+    
+    def analyze_file_bit_flips(self, noncrit_file: Path, flip_percentages: List[float]) -> Dict:
         """
-        Calculate SSIM between original and modified files.
-        Uses the fastest available implementation.
+        Analyze the impact of bit flips on a single file.
         
         Args:
-            original_file: Path to original file
-            modified_file: Path to modified file
+            noncrit_file: Path to .ac.noncrit file
+            flip_percentages: List of flip percentages to test
             
         Returns:
-            SSIM value (0.0 to 1.0, where 1.0 is identical)
+            Dictionary with analysis results
         """
-        # Priority order: C++ > PyTorch > Optimized scikit-image
-        if self.cpp_ssim_path and self.cpp_ssim_path.exists():
-            return self.calculate_ssim_cpp(original_file, modified_file)
-        elif self.fast_ssim and self.ssim_fn is not None:
-            return self.calculate_ssim_fast_pytorch(original_file, modified_file)
-        else:
-            return self.calculate_ssim_optimized(original_file, modified_file)
-    
-    def process_single_test_image(self, args_tuple):
-        """
-        Process a single test image with all flip percentages.
-        This function is designed to be called in parallel.
-        
-        Args:
-            args_tuple: Tuple containing (test_image, flip_percentages, process_id)
-            
-        Returns:
-            Dictionary with results for this image
-        """
-        test_image, flip_percentages, process_id = args_tuple
-        
-        print(f"[Process {process_id}] Processing: {test_image.name}")
-        
-        # Create process-specific temporary directory
-        process_temp_dir = self.temp_dir / f"process_{process_id}"
-        process_temp_dir.mkdir(exist_ok=True)
-        
-        # Create unique base name for split files
-        base_name = f"test_{test_image.stem}_{process_id}_{int(time.time())}"
-        output_base = process_temp_dir / base_name
-        
-        # Split the test image using GuetzliSplit
-        if not self.split_image_with_guetzli(test_image, output_base):
-            print(f"[Process {process_id}] Failed to split {test_image}")
-            return None
-        
-        # Find the generated .crit and .ac.noncrit files
-        crit_file = output_base.with_suffix('.jpg.crit')
-        noncrit_file = output_base.with_suffix('.jpg.ac.noncrit')
-        
-        if not crit_file.exists() or not noncrit_file.exists():
-            print(f"[Process {process_id}] Split files not found: {crit_file} or {noncrit_file}")
-            return None
-        
-        # Create a copy of the original test image for comparison
-        original_copy = process_temp_dir / f"original_{test_image.stem}{test_image.suffix}"
-        with open(test_image, 'rb') as src, open(original_copy, 'wb') as dst:
-            dst.write(src.read())
-        
-        # Create a backup of the original .ac.noncrit file to restore before each test
-        original_noncrit_backup = process_temp_dir / f"original_{noncrit_file.name}"
-        with open(noncrit_file, 'rb') as src, open(original_noncrit_backup, 'wb') as dst:
-            dst.write(src.read())
-        
-        file_results = {
-            'filename': test_image.name,
-            'crit_file': str(crit_file),
-            'noncrit_file': str(noncrit_file),
-            'flip_percentages': [],
-            'ssim_values': [],
-            'file_size': test_image.stat().st_size,
-            'original_image_path': str(original_copy),
-            'modified_image_paths': []
-        }
-        
-        for flip_pct in flip_percentages:
-            # Restore the original .ac.noncrit file before each test
-            with open(original_noncrit_backup, 'rb') as src, open(noncrit_file, 'wb') as dst:
-                dst.write(src.read())
-            
-            # Apply bit flips to the .ac.noncrit file
-            if not self.run_bitflipper(noncrit_file, flip_pct):
-                print(f"[Process {process_id}] BitFlipper failed for {flip_pct:.2f}%")
-                continue
-            
-            # Merge the files using GuetzliSplit to get the modified image
-            merged_image = process_temp_dir / f"merged_{test_image.stem}_{flip_pct:.2f}{test_image.suffix}"
-            if not self.merge_image_with_guetzli(crit_file, merged_image):
-                print(f"[Process {process_id}] GuetzliSplit merge failed for {flip_pct:.2f}%")
-                continue
-            
-            file_results['flip_percentages'].append(flip_pct)
-            file_results['modified_image_paths'].append(str(merged_image))
-            print(f"[Process {process_id}] Completed {flip_pct:.2f}% bit flips for {test_image.name}")
-        
-        # Clean up backup
-        original_noncrit_backup.unlink(missing_ok=True)
-        
-        # Clean up split files
-        crit_file.unlink(missing_ok=True)
-        noncrit_file.unlink(missing_ok=True)
-        
-        return file_results
-    
-    def process_single_existing_file(self, args_tuple):
-        """
-        Process a single existing .ac.noncrit file with all flip percentages.
-        This function is designed to be called in parallel.
-        
-        Args:
-            args_tuple: Tuple containing (noncrit_file, flip_percentages, process_id)
-            
-        Returns:
-            Dictionary with results for this file
-        """
-        noncrit_file, flip_percentages, process_id = args_tuple
-        
-        print(f"[Process {process_id}] Processing: {noncrit_file.name}")
-        
-        # Create process-specific temporary directory
-        process_temp_dir = self.temp_dir / f"process_{process_id}"
-        process_temp_dir.mkdir(exist_ok=True)
+        print(f"Analyzing bit flips for: {noncrit_file.name}")
         
         # Find the corresponding .crit file
         crit_file = noncrit_file.with_suffix('.jpg.crit').with_name(noncrit_file.stem.replace('.ac', '') + '.jpg.crit')
         if not crit_file.exists():
-            print(f"[Process {process_id}] Could not find corresponding .crit file for {noncrit_file.name}")
+            print(f"Could not find corresponding .crit file for {noncrit_file.name}")
             return None
         
+        print(f"Found .crit file: {crit_file}")
+        
         # Create a copy of the original test image for comparison by merging the original files
-        original_merged = process_temp_dir / f"original_{noncrit_file.stem.replace('.ac', '')}.jpg"
+        original_merged = self.output_dir / f"original_{noncrit_file.stem.replace('.ac', '')}.jpg"
         if not self.merge_image_with_guetzli(crit_file, original_merged):
-            print(f"[Process {process_id}] Failed to merge original files for comparison")
+            print(f"Failed to merge original files for comparison")
             return None
         
         # Create a backup of the original .ac.noncrit file to restore before each test
-        original_noncrit_backup = process_temp_dir / f"original_{noncrit_file.name}"
+        original_noncrit_backup = self.output_dir / f"original_{noncrit_file.name}"
         with open(noncrit_file, 'rb') as src, open(original_noncrit_backup, 'wb') as dst:
             dst.write(src.read())
         
@@ -465,66 +339,134 @@ class BitFlipAnalyzer:
             'noncrit_file': str(noncrit_file),
             'flip_percentages': [],
             'ssim_values': [],
-            'file_size': noncrit_file.stat().st_size,
-            'original_image_path': str(original_merged),
-            'modified_image_paths': []
+            'file_size': noncrit_file.stat().st_size
         }
         
         for flip_pct in flip_percentages:
+            print(f"  Testing {flip_pct:.2f}% bit flips...")
+            
             # Restore the original .ac.noncrit file before each test
             with open(original_noncrit_backup, 'rb') as src, open(noncrit_file, 'wb') as dst:
                 dst.write(src.read())
             
             # Apply bit flips to the .ac.noncrit file
             if not self.run_bitflipper(noncrit_file, flip_pct):
-                print(f"[Process {process_id}] BitFlipper failed for {flip_pct:.2f}%")
+                print(f"    BitFlipper failed for {flip_pct:.2f}%")
                 continue
             
             # Merge the files using GuetzliSplit to get the modified image
-            modified_merged = process_temp_dir / f"modified_{noncrit_file.stem.replace('.ac', '')}_{flip_pct:.2f}.jpg"
+            modified_merged = self.output_dir / f"modified_{noncrit_file.stem.replace('.ac', '')}_{flip_pct:.2f}.jpg"
             if not self.merge_image_with_guetzli(crit_file, modified_merged):
-                print(f"[Process {process_id}] GuetzliSplit merge failed for {flip_pct:.2f}%")
+                print(f"    GuetzliSplit merge failed for {flip_pct:.2f}%")
                 continue
             
+            # Calculate SSIM
+            ssim_value = self.calculate_ssim(original_merged, modified_merged)
+            
             file_results['flip_percentages'].append(flip_pct)
-            file_results['modified_image_paths'].append(str(modified_merged))
-            print(f"[Process {process_id}] Completed {flip_pct:.2f}% bit flips for {noncrit_file.name}")
+            file_results['ssim_values'].append(ssim_value)
+            
+            print(f"    SSIM: {ssim_value:.4f}")
+            
+            # Clean up temporary modified merged image
+            modified_merged.unlink(missing_ok=True)
         
-        # Clean up backup
+        # Clean up original merged image and backup
+        original_merged.unlink(missing_ok=True)
         original_noncrit_backup.unlink(missing_ok=True)
         
         return file_results
     
-    def calculate_ssim_batch(self, results_data):
+    def analyze_test_image_bit_flips(self, test_image: Path, flip_percentages: List[float]) -> Dict:
         """
-        Calculate SSIM for all processed images in batch.
+        Analyze the impact of bit flips on a test image using GuetzliSplit.
         
         Args:
-            results_data: List of result dictionaries from parallel processing
+            test_image: Path to test image file
+            flip_percentages: List of flip percentages to test
+            
+        Returns:
+            Dictionary with analysis results
         """
-        print("\n=== Calculating SSIM for all processed images ===")
+        print(f"Analyzing bit flips for test image: {test_image.name}")
         
-        for result in results_data:
-            if not result or not result.get('modified_image_paths'):
+        # Create unique base name for split files
+        base_name = f"test_{test_image.stem}_{int(time.time())}"
+        output_base = self.output_dir / base_name
+        
+        # Split the test image using GuetzliSplit
+        print(f"Splitting {test_image} to {output_base}")
+        if not self.split_image_with_guetzli(test_image, output_base):
+            print(f"Failed to split {test_image}")
+            return None
+        
+        # Find the generated .crit and .ac.noncrit files
+        crit_file = output_base.with_suffix('.jpg.crit')
+        noncrit_file = output_base.with_suffix('.jpg.ac.noncrit')
+        
+        if not crit_file.exists() or not noncrit_file.exists():
+            print(f"Split files not found: {crit_file} or {noncrit_file}")
+            return None
+        
+        print(f"Found split files: {crit_file.name}, {noncrit_file.name}")
+        
+        # Create a copy of the original test image for comparison
+        original_copy = self.output_dir / f"original_{test_image.stem}{test_image.suffix}"
+        with open(test_image, 'rb') as src, open(original_copy, 'wb') as dst:
+            dst.write(src.read())
+        
+        # Create a backup of the original .ac.noncrit file to restore before each test
+        original_noncrit_backup = self.output_dir / f"original_{noncrit_file.name}"
+        with open(noncrit_file, 'rb') as src, open(original_noncrit_backup, 'wb') as dst:
+            dst.write(src.read())
+        
+        file_results = {
+            'filename': test_image.name,
+            'crit_file': str(crit_file),
+            'noncrit_file': str(noncrit_file),
+            'flip_percentages': [],
+            'ssim_values': [],
+            'file_size': test_image.stat().st_size
+        }
+        
+        for flip_pct in flip_percentages:
+            print(f"  Testing {flip_pct:.2f}% bit flips...")
+            
+            # Restore the original .ac.noncrit file before each test
+            with open(original_noncrit_backup, 'rb') as src, open(noncrit_file, 'wb') as dst:
+                dst.write(src.read())
+            
+            # Apply bit flips to the .ac.noncrit file
+            if not self.run_bitflipper(noncrit_file, flip_pct):
+                print(f"    BitFlipper failed for {flip_pct:.2f}%")
                 continue
             
-            original_path = Path(result['original_image_path'])
-            if not original_path.exists():
-                print(f"Original image not found: {original_path}")
+            # Merge the files using GuetzliSplit to get the modified image
+            merged_image = self.output_dir / f"merged_{test_image.stem}_{flip_pct:.2f}{test_image.suffix}"
+            if not self.merge_image_with_guetzli(crit_file, merged_image):
+                print(f"    GuetzliSplit merge failed for {flip_pct:.2f}%")
                 continue
             
-            ssim_values = []
-            for modified_path_str in result['modified_image_paths']:
-                modified_path = Path(modified_path_str)
-                if modified_path.exists():
-                    ssim_value = self.calculate_ssim(original_path, modified_path)
-                    ssim_values.append(ssim_value)
-                else:
-                    print(f"Modified image not found: {modified_path}")
-                    ssim_values.append(0.0)
+            # Calculate SSIM
+            ssim_value = self.calculate_ssim(original_copy, merged_image)
             
-            result['ssim_values'] = ssim_values
-            print(f"Calculated SSIM for {result['filename']}: {len(ssim_values)} values")
+            file_results['flip_percentages'].append(flip_pct)
+            file_results['ssim_values'].append(ssim_value)
+            
+            print(f"    SSIM: {ssim_value:.4f}")
+            
+            # Clean up temporary merged image
+            merged_image.unlink(missing_ok=True)
+        
+        # Clean up original copy and backup
+        original_copy.unlink(missing_ok=True)
+        original_noncrit_backup.unlink(missing_ok=True)
+        
+        # Clean up split files
+        crit_file.unlink(missing_ok=True)
+        noncrit_file.unlink(missing_ok=True)
+        
+        return file_results
     
     def create_bit_flip_graphs(self, analysis_results: List[Dict]):
         """Create graphs showing the impact of bit flips on SSIM."""
@@ -704,11 +646,11 @@ class BitFlipAnalyzer:
         print("\n=== Cleaning up ===")
         
         try:
-            # Remove temporary directories
-            if self.temp_dir.exists():
-                shutil.rmtree(self.temp_dir)
-                print(f"Removed temporary directory: {self.temp_dir}")
+            # Remove temporary files in output directory
+            for temp_file in self.output_dir.glob("temp_*"):
+                temp_file.unlink(missing_ok=True)
             
+            print(f"Cleaned up temporary files in: {self.output_dir}")
             print(f"Graphs preserved in: {self.graphs_dir}")
                 
         except Exception as e:
@@ -717,7 +659,7 @@ class BitFlipAnalyzer:
     def run_analysis(self, flip_range: Tuple[float, float] = (0.1, 5.0), 
                     flip_steps: int = 20, use_test_images: bool = False):
         """
-        Run the complete bit flip analysis with parallel processing.
+        Run the complete bit flip analysis.
         
         Args:
             flip_range: Tuple of (min_percentage, max_percentage)
@@ -727,7 +669,6 @@ class BitFlipAnalyzer:
         print("=== Bit Flip Analysis for CriticalFUSE (FUSE) ===")
         print(f"Storage folder: {self.storage_folder}")
         print(f"BitFlipper path: {self.bitflipper_path}")
-        print(f"Number of processes: {self.num_processes}")
         if self.test_images_folder:
             print(f"Test images folder: {self.test_images_folder}")
             if self.max_test_images:
@@ -740,8 +681,6 @@ class BitFlipAnalyzer:
         flip_percentages = np.linspace(flip_range[0], flip_range[1], flip_steps)
         print(f"Testing flip percentages: {flip_percentages}")
         
-        start_time = time.time()
-        
         if use_test_images and self.test_images_folder:
             # Use test images
             test_images = self.find_test_images()
@@ -750,25 +689,13 @@ class BitFlipAnalyzer:
                 print("No test images found in the test images folder!")
                 return
             
-            print(f"\n=== Processing {len(test_images)} test images in parallel ===")
-            
-            # Prepare arguments for parallel processing
-            args_list = [(img, flip_percentages, i) for i, img in enumerate(test_images)]
-            
-            # Process images in parallel
-            with ProcessPoolExecutor(max_workers=self.num_processes) as executor:
-                futures = [executor.submit(self.process_single_test_image, args) for args in args_list]
+            # Analyze each test image
+            for test_image in test_images:
+                print(f"\nAnalyzing test image: {test_image.name}")
+                file_results = self.analyze_test_image_bit_flips(test_image, flip_percentages)
                 
-                # Collect results
-                results = []
-                for future in as_completed(futures):
-                    try:
-                        result = future.result()
-                        if result:
-                            results.append(result)
-                    except Exception as e:
-                        print(f"Error in parallel processing: {e}")
-            
+                if file_results:
+                    self.results['tests'].append(file_results)
         else:
             # Use existing .noncrit files
             noncrit_files = self.find_noncrit_files()
@@ -777,35 +704,13 @@ class BitFlipAnalyzer:
                 print("No .noncrit files found in the storage folder!")
                 return
             
-            print(f"\n=== Processing {len(noncrit_files)} existing files in parallel ===")
-            
-            # Prepare arguments for parallel processing
-            args_list = [(file, flip_percentages, i) for i, file in enumerate(noncrit_files)]
-            
-            # Process files in parallel
-            with ProcessPoolExecutor(max_workers=self.num_processes) as executor:
-                futures = [executor.submit(self.process_single_existing_file, args) for args in args_list]
+            # Analyze each file
+            for noncrit_file in noncrit_files:
+                print(f"\nAnalyzing: {noncrit_file.name}")
+                file_results = self.analyze_file_bit_flips(noncrit_file, flip_percentages)
                 
-                # Collect results
-                results = []
-                for future in as_completed(futures):
-                    try:
-                        result = future.result()
-                        if result:
-                            results.append(result)
-                    except Exception as e:
-                        print(f"Error in parallel processing: {e}")
-        
-        processing_time = time.time() - start_time
-        print(f"\n=== Parallel processing completed in {processing_time:.2f} seconds ===")
-        print(f"Successfully processed {len(results)} files")
-        
-        # Calculate SSIM for all processed images
-        self.calculate_ssim_batch(results)
-        
-        # Store results
-        self.results['tests'] = results
-        self.results['processing_time_seconds'] = processing_time
+                if file_results:
+                    self.results['tests'].append(file_results)
         
         # Generate graphs
         if self.results['tests']:
@@ -817,211 +722,6 @@ class BitFlipAnalyzer:
         
         # Cleanup
         self.cleanup()
-
-    def _init_fast_ssim(self):
-        """Initialize fast SSIM implementation using PyTorch."""
-        try:
-            import torch
-            import torch.nn.functional as F
-            from torch import nn
-            
-            class FastSSIM(nn.Module):
-                def __init__(self, window_size=11, size_average=True):
-                    super(FastSSIM, self).__init__()
-                    self.window_size = window_size
-                    self.size_average = size_average
-                    self.channel = 1
-                    self.window = self._create_window(window_size, self.channel)
-
-                def _gaussian(self, window_size, sigma):
-                    gauss = torch.Tensor([torch.exp(torch.tensor(-(x - window_size//2)**2/float(2*sigma**2))) for x in range(window_size)])
-                    return gauss/gauss.sum()
-
-                def _create_window(self, window_size, channel):
-                    _1D_window = self._gaussian(window_size, 1.5).unsqueeze(1)
-                    _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-                    window = _2D_window.expand(channel, 1, window_size, window_size).contiguous()
-                    return window
-
-                def _ssim(self, img1, img2, window, window_size, channel, size_average=True):
-                    mu1 = F.conv2d(img1, window, padding=window_size//2, groups=channel)
-                    mu2 = F.conv2d(img2, window, padding=window_size//2, groups=channel)
-
-                    mu1_sq = mu1.pow(2)
-                    mu2_sq = mu2.pow(2)
-                    mu1_mu2 = mu1 * mu2
-
-                    sigma1_sq = F.conv2d(img1 * img1, window, padding=window_size//2, groups=channel) - mu1_sq
-                    sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size//2, groups=channel) - mu2_sq
-                    sigma12 = F.conv2d(img1 * img2, window, padding=window_size//2, groups=channel) - mu1_mu2
-
-                    C1 = 0.01**2
-                    C2 = 0.03**2
-
-                    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
-
-                    if size_average:
-                        return ssim_map.mean()
-                    else:
-                        return ssim_map.mean(1).mean(1).mean(1)
-
-                def forward(self, img1, img2):
-                    (_, channel, _, _) = img1.size()
-
-                    if channel == self.channel and self.window.data.type() == img1.data.type():
-                        window = self.window
-                    else:
-                        window = self._create_window(self.window_size, channel)
-                        
-                        if img1.is_cuda:
-                            window = window.cuda(img1.get_device())
-                        window = window.type_as(img1)
-                        
-                        self.window = window
-                        self.channel = channel
-
-                    return self._ssim(img1, img2, window, self.window_size, channel, self.size_average)
-            
-            return FastSSIM()
-            
-        except ImportError:
-            print("PyTorch not available, falling back to optimized scikit-image SSIM")
-            return None
-    
-    def calculate_ssim_fast_pytorch(self, original_file: Path, modified_file: Path) -> float:
-        """
-        Calculate SSIM using PyTorch for maximum speed.
-        
-        Args:
-            original_file: Path to original file
-            modified_file: Path to modified file
-            
-        Returns:
-            SSIM value (0.0 to 1.0, where 1.0 is identical)
-        """
-        try:
-            import torch
-            import torchvision.transforms as transforms
-            from PIL import Image
-            
-            # Read images with PIL
-            original_img = Image.open(original_file).convert('L')  # Convert to grayscale
-            modified_img = Image.open(modified_file).convert('L')
-            
-            # Ensure same size
-            if original_img.size != modified_img.size:
-                modified_img = modified_img.resize(original_img.size, Image.LANCZOS)
-            
-            # Convert to tensors
-            transform = transforms.ToTensor()
-            original_tensor = transform(original_img).unsqueeze(0)  # Add batch dimension
-            modified_tensor = transform(modified_img).unsqueeze(0)
-            
-            # Calculate SSIM
-            if self.ssim_fn is not None:
-                ssim_value = self.ssim_fn(original_tensor, modified_tensor)
-                return float(ssim_value.item())
-            else:
-                # Fallback to optimized scikit-image
-                return self.calculate_ssim_optimized(original_file, modified_file)
-                
-        except Exception as e:
-            print(f"Error in PyTorch SSIM calculation: {e}")
-            return self.calculate_ssim_optimized(original_file, modified_file)
-    
-    def calculate_ssim_optimized(self, original_file: Path, modified_file: Path) -> float:
-        """
-        Optimized SSIM calculation using scikit-image with better performance.
-        
-        Args:
-            original_file: Path to original file
-            modified_file: Path to modified file
-            
-        Returns:
-            SSIM value (0.0 to 1.0, where 1.0 is identical)
-        """
-        try:
-            # Use PIL for faster image loading
-            from PIL import Image
-            import numpy as np
-            
-            # Read images with PIL (faster than cv2)
-            original_img = Image.open(original_file).convert('L')
-            modified_img = Image.open(modified_file).convert('L')
-            
-            # Ensure same size
-            if original_img.size != modified_img.size:
-                modified_img = modified_img.resize(original_img.size, Image.LANCZOS)
-            
-            # Convert to numpy arrays
-            original_array = np.array(original_img, dtype=np.float32)
-            modified_array = np.array(modified_img, dtype=np.float32)
-            
-            # Calculate SSIM with optimized parameters
-            ssim_value = ssim(original_array, modified_array, 
-                            data_range=255,
-                            gaussian_weights=True,
-                            sigma=1.5,
-                            use_sample_covariance=False,
-                            K1=0.01,
-                            K2=0.03)
-            
-            return float(ssim_value)
-            
-        except Exception as e:
-            print(f"Error in optimized SSIM calculation: {e}")
-            return 0.0
-    
-    def calculate_ssim_ultra_fast(self, original_file: Path, modified_file: Path) -> float:
-        """
-        Ultra-fast SSIM approximation using simple statistics.
-        This is much faster but less accurate than full SSIM.
-        
-        Args:
-            original_file: Path to original file
-            modified_file: Path to modified file
-            
-        Returns:
-            Approximate SSIM value (0.0 to 1.0, where 1.0 is identical)
-        """
-        try:
-            from PIL import Image
-            import numpy as np
-            
-            # Read images with PIL
-            original_img = Image.open(original_file).convert('L')
-            modified_img = Image.open(modified_file).convert('L')
-            
-            # Ensure same size
-            if original_img.size != modified_img.size:
-                modified_img = modified_img.resize(original_img.size, Image.LANCZOS)
-            
-            # Convert to numpy arrays
-            original_array = np.array(original_img, dtype=np.float32)
-            modified_array = np.array(modified_img, dtype=np.float32)
-            
-            # Calculate simple statistics
-            mu1 = np.mean(original_array)
-            mu2 = np.mean(modified_array)
-            
-            sigma1_sq = np.var(original_array)
-            sigma2_sq = np.var(modified_array)
-            sigma12 = np.mean((original_array - mu1) * (modified_array - mu2))
-            
-            # Constants for numerical stability
-            C1 = (0.01 * 255) ** 2
-            C2 = (0.03 * 255) ** 2
-            
-            # Simplified SSIM calculation
-            numerator = (2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)
-            denominator = (mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2)
-            
-            ssim_value = numerator / denominator
-            return float(ssim_value)
-            
-        except Exception as e:
-            print(f"Error in ultra-fast SSIM calculation: {e}")
-            return 0.0
 
 
 def main():
@@ -1038,13 +738,7 @@ def main():
                        help='Range of bit flip percentages (min max)')
     parser.add_argument('--flip-steps', type=int, default=20, 
                        help='Number of steps between min and max percentage')
-    parser.add_argument('--num-processes', type=int, help='Number of processes to use for parallel processing (default: min(CPU_count, 8))')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
-    parser.add_argument('--skip-ssim', action='store_true', help='Skip SSIM calculation entirely')
-    parser.add_argument('--fast-mode', action='store_true', help='Use fewer flip percentages for faster processing')
-    parser.add_argument('--fast-ssim', action='store_true', default=True, help='Use fast SSIM implementation (PyTorch-based, default: True)')
-    parser.add_argument('--ultra-fast-ssim', action='store_true', help='Use ultra-fast SSIM approximation (less accurate but much faster)')
-    parser.add_argument('--cpp-ssim', help='Path to C++ SSIM executable (fastest option)')
     
     args = parser.parse_args()
     
@@ -1057,20 +751,9 @@ def main():
         print(f"Error: BitFlipper executable '{args.bitflipper_path}' does not exist!")
         return 1
     
-    # Handle SSIM mode selection
-    fast_ssim = args.fast_ssim
-    if args.ultra_fast_ssim:
-        fast_ssim = False  # Will use ultra-fast mode in the calculation
-    
     # Create analyzer and run analysis
     analyzer = BitFlipAnalyzer(args.storage_folder, args.bitflipper_path, 
-                              args.output_dir, args.test_images, args.output, args.max_test_images, 
-                              args.guetzli_split, args.num_processes, args.skip_ssim, args.fast_mode, fast_ssim,
-                              args.cpp_ssim)
-    
-    # Set ultra-fast mode if requested
-    if args.ultra_fast_ssim:
-        analyzer.calculate_ssim = analyzer.calculate_ssim_ultra_fast
+                              args.output_dir, args.test_images, args.output, args.max_test_images, args.guetzli_split)
     
     try:
         analyzer.run_analysis(flip_range=tuple(args.flip_range), 
