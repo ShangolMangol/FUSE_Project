@@ -112,7 +112,8 @@ bool MergeJpegBuffer(const std::string& critical_data,
     // Use the existing file paths for the stored files
     std::string crit_file_path = base_path + ext + ".crit";
     std::string noncrit_file_path = base_path + ext + ".noncrit";
-    std::string temp_output_file = "temp_output.jpg";
+    // Create temp file in the same directory as the input files
+    std::string temp_output_file = base_path + ext + ".temp_merge";
 
     // Write critical data to the stored file location
     std::ofstream crit_file(crit_file_path, std::ios::binary);
