@@ -93,6 +93,33 @@ class BitFlipAnalyzer:
         if not self.mount_point.exists():
             raise FileNotFoundError(f"Mount point not found at {self.mount_point}")
         
+        # Check mount point permissions and contents
+        try:
+            print(f"Mount point is writable: {os.access(self.mount_point, os.W_OK)}")
+            print(f"Mount point is readable: {os.access(self.mount_point, os.R_OK)}")
+            print(f"Mount point is executable: {os.access(self.mount_point, os.X_OK)}")
+            
+            # List existing files in mount point
+            existing_files = list(self.mount_point.glob("*"))
+            print(f"Existing files in mount point: {len(existing_files)}")
+            for f in existing_files[:5]:  # Show first 5 files
+                print(f"  - {f.name}")
+            if len(existing_files) > 5:
+                print(f"  ... and {len(existing_files) - 5} more files")
+        except Exception as e:
+            print(f"Warning: Could not check mount point details: {e}")
+        
+        # Test if we can write to mount point
+        try:
+            test_file = self.mount_point / "test_write_permission.txt"
+            with open(test_file, 'w') as f:
+                f.write("test")
+            test_file.unlink()  # Clean up
+            print("Mount point write test: SUCCESS")
+        except Exception as e:
+            print(f"Mount point write test: FAILED - {e}")
+            print("This might cause issues with copying test images")
+        
         # Verify test images folder exists if provided
         if self.test_images_folder:
             print(f"Checking test images folder at: {self.test_images_folder}")
@@ -124,7 +151,20 @@ class BitFlipAnalyzer:
         
         mount_image_path = self.mount_point / mount_name
         print(f"Copying {test_image_path} to {mount_image_path}")
-        shutil.copy2(test_image_path, mount_image_path)
+        
+        try:
+            # Try using shutil.copy2 first
+            shutil.copy2(test_image_path, mount_image_path)
+        except OSError as e:
+            print(f"shutil.copy2 failed: {e}")
+            try:
+                # Fallback to manual copy
+                with open(test_image_path, 'rb') as src:
+                    with open(mount_image_path, 'wb') as dst:
+                        dst.write(src.read())
+            except Exception as e2:
+                print(f"Manual copy also failed: {e2}")
+                raise
         
         # Wait for FUSE to process the file
         time.sleep(2)
@@ -360,13 +400,33 @@ class BitFlipAnalyzer:
         """
         print(f"Analyzing bit flips for test image: {test_image.name}")
         
-        # Copy test image to mount point with unique name
+        # Try to copy test image to mount point with unique name
         mount_name = f"test_{test_image.stem}_{int(time.time())}{test_image.suffix}"
-        mount_image_path = self.copy_test_image_to_mount(test_image, mount_name)
+        try:
+            mount_image_path = self.copy_test_image_to_mount(test_image, mount_name)
+        except Exception as e:
+            print(f"Failed to copy test image to mount point: {e}")
+            print("Trying to use existing files in mount point...")
+            
+            # Find existing image files in mount point
+            existing_images = []
+            for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.dng']:
+                existing_images.extend(list(self.mount_point.glob(f"*{ext}")))
+                existing_images.extend(list(self.mount_point.glob(f"*{ext.upper()}")))
+            
+            if not existing_images:
+                print("No existing images found in mount point. Cannot proceed.")
+                return None
+            
+            # Use the first existing image
+            mount_image_path = existing_images[0]
+            mount_name = mount_image_path.name
+            print(f"Using existing image: {mount_image_path}")
         
-        # Wait for FUSE to create the split files
-        print("Waiting for FUSE to create split files...")
-        time.sleep(5)
+        # Wait for FUSE to create the split files (only if we copied a new file)
+        if mount_name.startswith("test_"):
+            print("Waiting for FUSE to create split files...")
+            time.sleep(5)
         
         # Find the corresponding .noncrit file
         noncrit_file = self.storage_folder / f"{mount_name}.noncrit"
@@ -376,14 +436,21 @@ class BitFlipAnalyzer:
         
         print(f"Found .noncrit file: {noncrit_file}")
         
-        # Create a copy of the original test image for comparison
-        original_copy = self.output_dir / f"original_{test_image.stem}{test_image.suffix}"
-        shutil.copy2(test_image, original_copy)
+        # Create a copy of the original image for comparison
+        if mount_name.startswith("test_"):
+            # We copied a test image, use the original test image
+            original_copy = self.output_dir / f"original_{test_image.stem}{test_image.suffix}"
+            shutil.copy2(test_image, original_copy)
+        else:
+            # We're using an existing image, copy it as the original
+            original_copy = self.output_dir / f"original_{mount_image_path.stem}{mount_image_path.suffix}"
+            shutil.copy2(mount_image_path, original_copy)
         
         file_results = {
             'filename': test_image.name,
             'mount_name': mount_name,
             'noncrit_file': str(noncrit_file),
+            'used_existing_image': not mount_name.startswith("test_"),
             'flip_percentages': [],
             'ssim_values': [],
             'file_size': test_image.stat().st_size
