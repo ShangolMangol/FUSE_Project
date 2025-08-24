@@ -454,15 +454,40 @@ class BitFlipAnalyzer:
         
         return file_results
     
+    def calculate_ssim_parallel(self, args_tuple):
+        """
+        Calculate SSIM for a single image comparison in parallel.
+        
+        Args:
+            args_tuple: Tuple containing (original_path, modified_path, filename, flip_pct)
+            
+        Returns:
+            Tuple of (filename, flip_pct, ssim_value)
+        """
+        original_path, modified_path, filename, flip_pct = args_tuple
+        
+        try:
+            if not original_path.exists() or not modified_path.exists():
+                return (filename, flip_pct, 0.0)
+            
+            ssim_value = self.calculate_ssim(original_path, modified_path)
+            return (filename, flip_pct, ssim_value)
+            
+        except Exception as e:
+            print(f"Error calculating SSIM for {filename} at {flip_pct}%: {e}")
+            return (filename, flip_pct, 0.0)
+    
     def calculate_ssim_batch(self, results_data):
         """
-        Calculate SSIM for all processed images in batch.
+        Calculate SSIM for all processed images in parallel batch.
         
         Args:
             results_data: List of result dictionaries from parallel processing
         """
-        print("\n=== Calculating SSIM for all processed images ===")
+        print("\n=== Calculating SSIM for all processed images in parallel ===")
         
+        # Prepare all SSIM calculation tasks
+        ssim_tasks = []
         for result in results_data:
             if not result or not result.get('modified_image_paths'):
                 continue
@@ -472,18 +497,51 @@ class BitFlipAnalyzer:
                 print(f"Original image not found: {original_path}")
                 continue
             
-            ssim_values = []
-            for modified_path_str in result['modified_image_paths']:
+            for i, modified_path_str in enumerate(result['modified_image_paths']):
                 modified_path = Path(modified_path_str)
-                if modified_path.exists():
-                    ssim_value = self.calculate_ssim(original_path, modified_path)
-                    ssim_values.append(ssim_value)
-                else:
-                    print(f"Modified image not found: {modified_path}")
-                    ssim_values.append(0.0)
+                flip_pct = result['flip_percentages'][i] if i < len(result['flip_percentages']) else 0.0
+                ssim_tasks.append((original_path, modified_path, result['filename'], flip_pct))
+        
+        if not ssim_tasks:
+            print("No SSIM tasks to process")
+            return
+        
+        print(f"Processing {len(ssim_tasks)} SSIM calculations in parallel...")
+        
+        # Process SSIM calculations in parallel
+        ssim_results = {}
+        with ProcessPoolExecutor(max_workers=self.num_processes) as executor:
+            futures = [executor.submit(self.calculate_ssim_parallel, task) for task in ssim_tasks]
             
-            result['ssim_values'] = ssim_values
-            print(f"Calculated SSIM for {result['filename']}: {len(ssim_values)} values")
+            # Collect results with progress tracking
+            completed = 0
+            for future in as_completed(futures):
+                try:
+                    filename, flip_pct, ssim_value = future.result()
+                    
+                    # Group results by filename
+                    if filename not in ssim_results:
+                        ssim_results[filename] = {'flip_percentages': [], 'ssim_values': []}
+                    
+                    ssim_results[filename]['flip_percentages'].append(flip_pct)
+                    ssim_results[filename]['ssim_values'].append(ssim_value)
+                    
+                    completed += 1
+                    if completed % 10 == 0 or completed == len(ssim_tasks):
+                        print(f"SSIM progress: {completed}/{len(ssim_tasks)} ({completed/len(ssim_tasks)*100:.1f}%)")
+                        
+                except Exception as e:
+                    print(f"Error in SSIM calculation: {e}")
+        
+        # Update the original results with SSIM values
+        for result in results_data:
+            if result and result.get('filename') in ssim_results:
+                ssim_data = ssim_results[result['filename']]
+                # Sort by flip percentage to ensure correct order
+                sorted_data = sorted(zip(ssim_data['flip_percentages'], ssim_data['ssim_values']))
+                result['flip_percentages'] = [pct for pct, _ in sorted_data]
+                result['ssim_values'] = [ssim for _, ssim in sorted_data]
+                print(f"Calculated SSIM for {result['filename']}: {len(result['ssim_values'])} values")
     
     def create_bit_flip_graphs(self, analysis_results: List[Dict]):
         """Create graphs showing the impact of bit flips on SSIM."""
