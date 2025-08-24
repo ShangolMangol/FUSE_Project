@@ -62,12 +62,17 @@ static void fullpath(char fpath[PATH_MAX], const char *path) {
     }
 }
 
+// Global FUSE context for notifications
+static struct fuse* fuse_context = nullptr;
+
 // Helper to force attribute cache invalidation
 static void invalidate_attributes(const char* path) {
-    // This is a placeholder for FUSE attribute cache invalidation
-    // In a real implementation, you would use FUSE's notification mechanism
-    // For now, we'll rely on the mapping file update to trigger a refresh
-    (void)path; // Suppress unused parameter warning
+    if (fuse_context) {
+        // Use FUSE's notification mechanism to invalidate the cache
+        // This tells the kernel that the file attributes have changed
+        fuse_invalidate_path(fuse_context, path);
+        std::cout << "Invalidated FUSE cache for path: " << path << std::endl;
+    }
 }
 
 // Helper to get file handler based on file type
@@ -419,11 +424,8 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
                         std::cout << "Updated mapping file with new size: " << it->second.total_size << std::endl;
                     }
                     
-                    // Force a getattr call to refresh the file attributes immediately
-                    struct stat st;
-                    if (criticalfs_getattr(path, &st, NULL) == 0) {
-                        std::cout << "Forced getattr refresh - file size is now: " << st.st_size << std::endl;
-                    }
+                    // Force FUSE cache invalidation to update file attributes immediately
+                    invalidate_attributes(path);
                 } else {
                     std::cerr << "Failed to process file of size: " << it->second.total_size << " bytes" << std::endl;
                 }
@@ -461,11 +463,8 @@ static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
                         std::cout << "Updated mapping file with new size on flush: " << it->second.total_size << std::endl;
                     }
                     
-                    // Force a getattr call to refresh the file attributes immediately
-                    struct stat st;
-                    if (criticalfs_getattr(path, &st, NULL) == 0) {
-                        std::cout << "Forced getattr refresh on flush - file size is now: " << st.st_size << std::endl;
-                    }
+                    // Force FUSE cache invalidation to update file attributes immediately
+                    invalidate_attributes(path);
                     
                     write_buffers.erase(it); // Clean up buffer after successful processing
                 }
@@ -679,6 +678,17 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
 //     return 0;
 // }
 
+static int criticalfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+    (void) conn;
+    (void) cfg;
+    
+    // Store the FUSE context for notifications
+    fuse_context = fuse_get_context()->fuse;
+    std::cout << "FUSE filesystem initialized" << std::endl;
+    
+    return 0;
+}
+
 static const struct fuse_operations criticalfs_oper = {
     .getattr     = criticalfs_getattr,
     // .readlink    = ...,
@@ -704,7 +714,7 @@ static const struct fuse_operations criticalfs_oper = {
     .readdir     = criticalfs_readdir,
     // .releasedir  = ...,
     // .fsyncdir    = ...,
-    // .init        = ...,
+    .init        = criticalfs_init,
     // .destroy     = ...,
     // .access      = ...,
     .create      = criticalfs_create,
