@@ -67,10 +67,15 @@ class BitFlipAnalyzer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Verify bitflipper exists
+        print(f"Checking BitFlipper at: {self.bitflipper_path}")
+        print(f"BitFlipper absolute path: {self.bitflipper_path.absolute()}")
+        print(f"BitFlipper exists: {self.bitflipper_path.exists()}")
         if not self.bitflipper_path.exists():
             raise FileNotFoundError(f"BitFlipper not found at {self.bitflipper_path}")
         
         # Verify mount point exists
+        print(f"Checking mount point at: {self.mount_point}")
+        print(f"Mount point exists: {self.mount_point.exists()}")
         if not self.mount_point.exists():
             raise FileNotFoundError(f"Mount point not found at {self.mount_point}")
     
@@ -129,6 +134,9 @@ class BitFlipAnalyzer:
             
             # Run BitFlipper command in random mode (-r)
             cmd = [str(self.bitflipper_path), "-r", str(flip_percentage), str(input_file)]
+            print(f"Running command: {' '.join(cmd)}")
+            print(f"Current working directory: {os.getcwd()}")
+            print(f"BitFlipper path exists: {self.bitflipper_path.exists()}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode != 0:
