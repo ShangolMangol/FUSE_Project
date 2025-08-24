@@ -252,7 +252,7 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-    std::cout << "Reading from file: " << fpath << std::endl;
+    std::cout << "Reading from file: " << fpath << " with size: " << size << " at offset: " << offset << std::endl;
     
     std::string fileKey = std::string(path);
     auto& readBuffer = read_buffers[fileKey];
@@ -266,9 +266,13 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
             return -ENOENT;
         }
         
-        // Load file into buffer on first read
-        if (!readBuffer.loaded) {
-            std::cout << "First read of critical file - loading into buffer" << std::endl;
+        // If reading from offset 0, always read fresh from disk and invalidate any existing buffer
+        if (offset == 0) {
+            std::cout << "Reading from offset 0 - reading fresh from disk" << std::endl;
+            
+            // Invalidate any existing buffer
+            readBuffer.loaded = false;
+            readBuffer.data.clear();
             
             // Get file size first
             struct stat st;
@@ -287,7 +291,33 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
             }
             
             readBuffer.loaded = true;
-            std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer" << std::endl;
+            std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+        } else {
+            // Reading from non-zero offset - check if we have a valid buffer
+            if (!readBuffer.loaded) {
+                std::cout << "No valid buffer for non-zero offset read - reading fresh from disk" << std::endl;
+                
+                // Get file size first
+                struct stat st;
+                if (criticalfs_getattr(path, &st, NULL) != 0) {
+                    return -errno;
+                }
+                readBuffer.total_size = st.st_size;
+                
+                // Resize buffer to accommodate entire file
+                readBuffer.data.resize(readBuffer.total_size);
+                
+                // Read entire file using the handler
+                if (handler->readFile(mappingPath.c_str(), readBuffer.data.data(), readBuffer.total_size, 0) != ResultCode::SUCCESS) {
+                    std::cerr << "Failed to load file into read buffer" << std::endl;
+                    return -errno;
+                }
+                
+                readBuffer.loaded = true;
+                std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+            } else {
+                std::cout << "Using existing buffer for non-zero offset read" << std::endl;
+            }
         }
         
         // Read from buffer
@@ -302,8 +332,13 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
     }
 
     // Not a critical file, handle with read buffer
-    if (!readBuffer.loaded) {
-        std::cout << "First read of regular file - loading into buffer" << std::endl;
+    if (offset == 0) {
+        // Reading from offset 0 - always read fresh from disk
+        std::cout << "Reading regular file from offset 0 - reading fresh from disk" << std::endl;
+        
+        // Invalidate any existing buffer
+        readBuffer.loaded = false;
+        readBuffer.data.clear();
         
         // Get file size
         struct stat st;
@@ -330,7 +365,41 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
         
         readBuffer.total_size = bytesRead;
         readBuffer.loaded = true;
-        std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer" << std::endl;
+        std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+    } else {
+        // Reading from non-zero offset - check if we have a valid buffer
+        if (!readBuffer.loaded) {
+            std::cout << "No valid buffer for non-zero offset read - reading fresh from disk" << std::endl;
+            
+            // Get file size
+            struct stat st;
+            if (criticalfs_getattr(path, &st, NULL) != 0) {
+                return -errno;
+            }
+            readBuffer.total_size = st.st_size;
+            
+            // Resize buffer to accommodate entire file
+            readBuffer.data.resize(readBuffer.total_size);
+            
+            // Read entire file
+            int fd = open(fpath, O_RDONLY);
+            if (fd == -1) {
+                return -errno;
+            }
+            
+            ssize_t bytesRead = read(fd, readBuffer.data.data(), readBuffer.total_size);
+            close(fd);
+            
+            if (bytesRead == -1) {
+                return -errno;
+            }
+            
+            readBuffer.total_size = bytesRead;
+            readBuffer.loaded = true;
+            std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+        } else {
+            std::cout << "Using existing buffer for non-zero offset read" << std::endl;
+        }
     }
     
     // Read from buffer
@@ -412,13 +481,6 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
                 ResultCode result = handler->writeFile(mappingPath.c_str(), it->second.data.data(), it->second.total_size, 0);
                 if (result == ResultCode::SUCCESS) {
                     std::cout << "Successfully processed complete file of size: " << it->second.total_size << " bytes" << std::endl;
-                    // Invalidate read buffer after successful write
-                    auto readIt = read_buffers.find(fileKey);
-                    if (readIt != read_buffers.end()) {
-                        readIt->second.loaded = false;
-                        readIt->second.data.clear();
-                        std::cout << "Invalidated read buffer after file write" << std::endl;
-                    }
                     
                     // Force FUSE cache invalidation to update file attributes immediately
                     invalidate_attributes(path);
@@ -429,6 +491,14 @@ static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
         }
         // Use the key to erase instead of the iterator which may be invalid after invalidate_attributes
         write_buffers.erase(fileKey);
+    }
+    
+    // Always invalidate read buffer after release to ensure fresh reads
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        readIt->second.loaded = false;
+        readIt->second.data.clear();
+        std::cout << "Invalidated read buffer after release for file: " << path << std::endl;
     }
     
     return 0;
@@ -460,6 +530,14 @@ static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
                 }
             }
         }
+    }
+    
+    // Always invalidate read buffer after flush to ensure fresh reads
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        readIt->second.loaded = false;
+        readIt->second.data.clear();
+        std::cout << "Invalidated read buffer after flush for file: " << path << std::endl;
     }
     
     return 0;
