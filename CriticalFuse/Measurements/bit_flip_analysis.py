@@ -133,10 +133,13 @@ class BitFlipAnalyzer:
             shutil.copy2(input_file, backup_file)
             
             # Run BitFlipper command in random mode (-r)
-            cmd = [str(self.bitflipper_path), "-r", str(flip_percentage), str(input_file)]
+            # Use absolute path to ensure it's found
+            bitflipper_abs_path = self.bitflipper_path.absolute()
+            cmd = [str(bitflipper_abs_path), "-r", str(flip_percentage), str(input_file)]
             print(f"Running command: {' '.join(cmd)}")
             print(f"Current working directory: {os.getcwd()}")
             print(f"BitFlipper path exists: {self.bitflipper_path.exists()}")
+            print(f"BitFlipper absolute path: {bitflipper_abs_path}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode != 0:
