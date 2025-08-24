@@ -22,8 +22,7 @@ GUETZLI_SRCS = \
     GuetzliSplit/dct_double.cc \
     GuetzliSplit/gamma_correct.cc \
     GuetzliSplit/score.cc \
-    GuetzliSplit/debug_print.cc \
-    GuetzliSplit/butteraugli_comparator.cc
+    GuetzliSplit/debug_print.cc
 
 # Common source files
 COMMON_SRCS = \
