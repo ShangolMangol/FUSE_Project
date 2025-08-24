@@ -19,7 +19,7 @@
 
 #include <stdint.h>
 
-#include "guetzli/jpeg_data.h"
+#include "jpeg_data.h"
 
 namespace guetzli {
 

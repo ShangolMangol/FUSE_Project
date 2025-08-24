@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/dct_double.h"
+#include "dct_double.h"
 
 #include <algorithm>
 #include <cmath>

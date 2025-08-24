@@ -17,7 +17,7 @@
 #ifndef GUETZLI_DEBUG_PRINT_H_
 #define GUETZLI_DEBUG_PRINT_H_
 
-#include "guetzli/stats.h"
+#include "stats.h"
 
 namespace guetzli {
 

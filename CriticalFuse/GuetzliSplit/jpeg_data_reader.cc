@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "guetzli/jpeg_data_reader.h"
+#include "jpeg_data_reader.h"
 
 #include <algorithm>
 #include <stdio.h>
 #include <string.h>
 
-#include "guetzli/jpeg_huffman_decode.h"
+#include "jpeg_huffman_decode.h"
 
 namespace guetzli {
 

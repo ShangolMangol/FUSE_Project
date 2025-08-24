@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/debug_print.h"
+#include "debug_print.h"
 
 namespace guetzli {
 

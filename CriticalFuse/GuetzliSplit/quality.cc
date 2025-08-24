@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/quality.h"
+#include "quality.h"
 
 namespace guetzli {
 

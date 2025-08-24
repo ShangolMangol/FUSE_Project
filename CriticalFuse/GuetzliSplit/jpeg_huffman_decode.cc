@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "guetzli/jpeg_huffman_decode.h"
+#include "jpeg_huffman_decode.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "guetzli/jpeg_data.h"
+#include "jpeg_data.h"
 
 namespace guetzli {
 

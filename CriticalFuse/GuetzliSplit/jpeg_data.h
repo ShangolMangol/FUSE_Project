@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-#include "guetzli/jpeg_error.h"
+#include "jpeg_error.h"
 
 namespace guetzli {
 

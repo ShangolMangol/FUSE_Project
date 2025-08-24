@@ -20,10 +20,10 @@
 #include <vector>
 
 #include "butteraugli/butteraugli.h"
-#include "guetzli/comparator.h"
-#include "guetzli/jpeg_data.h"
-#include "guetzli/output_image.h"
-#include "guetzli/stats.h"
+#include "comparator.h"
+#include "jpeg_data.h"
+#include "output_image.h"
+#include "stats.h"
 
 namespace guetzli {
 

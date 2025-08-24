@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/preprocess_downsample.h"
+#include "preprocess_downsample.h"
 
 #include <algorithm>
 #include <assert.h>

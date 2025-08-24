@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/jpeg_data.h"
+#include "jpeg_data.h"
 
 #include <assert.h>
 #include <string.h>

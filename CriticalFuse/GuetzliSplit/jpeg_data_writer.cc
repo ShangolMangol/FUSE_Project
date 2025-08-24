@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "guetzli/jpeg_data_writer.h"
-#include "guetzli/jpeg_data_reader.h"
+#include "jpeg_data_writer.h"
+#include "jpeg_data_reader.h"
 
 #include <assert.h>
 #include <cstdlib>
@@ -24,9 +24,9 @@
 #include <vector>
 #include <string>
 
-#include "guetzli/entropy_encode.h"
-#include "guetzli/fast_log.h"
-#include "guetzli/jpeg_bit_writer.h"
+#include "entropy_encode.h"
+#include "fast_log.h"
+#include "jpeg_bit_writer.h"
 
 namespace guetzli {
 

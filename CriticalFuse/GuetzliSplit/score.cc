@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/score.h"
+#include "score.h"
 
 #include <cmath>
 

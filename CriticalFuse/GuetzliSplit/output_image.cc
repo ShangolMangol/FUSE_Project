@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/output_image.h"
+#include "output_image.h"
 
 #include <algorithm>
 #include <assert.h>
@@ -23,12 +23,12 @@
 #include <cmath>
 #include <cstdlib>
 
-#include "guetzli/idct.h"
-#include "guetzli/color_transform.h"
-#include "guetzli/dct_double.h"
-#include "guetzli/gamma_correct.h"
-#include "guetzli/preprocess_downsample.h"
-#include "guetzli/quantize.h"
+#include "idct.h"
+#include "color_transform.h"
+#include "dct_double.h"
+#include "gamma_correct.h"
+#include "preprocess_downsample.h"
+#include "quantize.h"
 
 namespace guetzli {
 

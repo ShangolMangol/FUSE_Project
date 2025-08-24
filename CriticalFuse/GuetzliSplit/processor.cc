@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/processor.h"
+#include "processor.h"
 
 #include <algorithm>
 #include <set>
@@ -23,16 +23,16 @@
 #include <string>
 #include <memory>
 
-#include "guetzli/butteraugli_comparator.h"
-#include "guetzli/comparator.h"
-#include "guetzli/debug_print.h"
-#include "guetzli/fast_log.h"
-#include "guetzli/jpeg_data_decoder.h"
-#include "guetzli/jpeg_data_encoder.h"
-#include "guetzli/jpeg_data_reader.h"
-#include "guetzli/jpeg_data_writer.h"
-#include "guetzli/output_image.h"
-#include "guetzli/quantize.h"
+#include "butteraugli_comparator.h"
+#include "comparator.h"
+#include "debug_print.h"
+#include "fast_log.h"
+#include "jpeg_data_decoder.h"
+#include "jpeg_data_encoder.h"
+#include "jpeg_data_reader.h"
+#include "jpeg_data_writer.h"
+#include "output_image.h"
+#include "quantize.h"
 
 namespace guetzli {
 
@@ -368,7 +368,7 @@ void Processor::ComputeBlockZeroingOrder(
       90, 90, 90, 90, 90, 90, 90, 90,
   };
   static const double kWeight[3] = { 1.0, 0.22, 0.20 };
-#include "guetzli/order.inc"
+#include "order.inc"
   std::vector<std::pair<int, float> > input_order;
   for (int c = 0; c < 3; ++c) {
     if (!(comp_mask & (1 << c))) continue;

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "guetzli/butteraugli_comparator.h"
+#include "butteraugli_comparator.h"
 
 #include <algorithm>
 
-#include "guetzli/debug_print.h"
-#include "guetzli/gamma_correct.h"
-#include "guetzli/score.h"
+#include "debug_print.h"
+#include "gamma_correct.h"
+#include "score.h"
 
 namespace guetzli {
 

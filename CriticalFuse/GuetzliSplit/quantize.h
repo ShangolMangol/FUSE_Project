@@ -17,7 +17,7 @@
 #ifndef GUETZLI_QUANTIZE_H_
 #define GUETZLI_QUANTIZE_H_
 
-#include "guetzli/jpeg_data.h"
+#include "jpeg_data.h"
 
 namespace guetzli {
 

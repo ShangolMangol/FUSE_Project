@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "guetzli/jpeg_data_decoder.h"
+#include "jpeg_data_decoder.h"
 
-#include "guetzli/output_image.h"
+#include "output_image.h"
 
 namespace guetzli {
 

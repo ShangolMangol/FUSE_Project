@@ -16,7 +16,7 @@
 
 // Entropy encoding (Huffman) utilities.
 
-#include "guetzli/entropy_encode.h"
+#include "entropy_encode.h"
 
 #include <assert.h>
 #include <algorithm>

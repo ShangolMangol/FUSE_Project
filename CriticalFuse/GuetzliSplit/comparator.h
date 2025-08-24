@@ -19,8 +19,8 @@
 
 #include <vector>
 
-#include "guetzli/output_image.h"
-#include "guetzli/stats.h"
+#include "output_image.h"
+#include "stats.h"
 
 namespace guetzli {
 

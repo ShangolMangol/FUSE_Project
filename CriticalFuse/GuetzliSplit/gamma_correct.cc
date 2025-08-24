@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/gamma_correct.h"
+#include "gamma_correct.h"
 
 #include <cmath>
 

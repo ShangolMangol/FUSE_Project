@@ -16,7 +16,7 @@
 
 // Integer implementation of the Inverse Discrete Cosine Transform (IDCT).
 
-#include "guetzli/idct.h"
+#include "idct.h"
 
 #include <algorithm>
 #include <math.h>

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "guetzli/quantize.h"
+#include "quantize.h"
 
 namespace guetzli {
 

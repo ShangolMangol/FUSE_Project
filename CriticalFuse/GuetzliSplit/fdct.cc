@@ -18,7 +18,7 @@
 //
 // Note! DCT output is kept scaled by 16, to retain maximum 16bit precision
 
-#include "guetzli/fdct.h"
+#include "fdct.h"
 
 namespace guetzli {
 

@@ -25,12 +25,12 @@
 #include <sstream>
 #include <string.h>
 #include "png.h"
-#include "guetzli/jpeg_data.h"
-#include "guetzli/jpeg_data_reader.h"
-#include "guetzli/jpeg_data_writer.h"
-#include "guetzli/processor.h"
-#include "guetzli/quality.h"
-#include "guetzli/stats.h"
+#include "jpeg_data.h"
+#include "jpeg_data_reader.h"
+#include "jpeg_data_writer.h"
+#include "processor.h"
+#include "quality.h"
+#include "stats.h"
 
 namespace {
 
