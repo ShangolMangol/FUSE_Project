@@ -48,7 +48,7 @@ ResultCode JpegFileHandler::writeFile(const char* mappingPath, const char* buffe
         noncritFile.write(noncritical_data.data(), noncritical_data.size());
         noncritFile.close();
 
-        int safeSize = double(size) * 1.05;
+        int safeSize = double(size) * 1.1;
         // Create mapping file with size information
         std::ofstream mappingFile(mappingPath);
         mappingFile << "size: " << safeSize << std::endl;
