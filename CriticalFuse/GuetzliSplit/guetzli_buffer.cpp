@@ -112,8 +112,6 @@ bool MergeJpegBuffer(const std::string& critical_data,
     // Use the existing file paths for the stored files
     std::string crit_file_path = base_path + ext + ".crit";
     std::string noncrit_file_path = base_path + ext + ".noncrit";
-    // Create temp file in the same directory as the input files
-    std::string temp_output_file = base_path + ext + ".temp_merge";
 
     // Write critical data to the stored file location
     std::ofstream crit_file(crit_file_path, std::ios::binary);
@@ -133,26 +131,43 @@ bool MergeJpegBuffer(const std::string& critical_data,
     noncrit_file.write(noncritical_data.data(), noncritical_data.size());
     noncrit_file.close();
 
-    // Use the existing MergeCritNoncrit function
-    bool success = MergeCritNoncrit(crit_file_path, noncrit_file_path, temp_output_file);
-
-    if (success) {
-        // Read the merged output
-        std::ifstream output_file(temp_output_file, std::ios::binary);
-        if (output_file.is_open()) {
-            std::stringstream buffer;
-            buffer << output_file.rdbuf();
-            jpeg_data = buffer.str();
-            output_file.close();
-        } else {
-            success = false;
-        }
+    // Read the critical file (contains DC coefficients and AC symbols)
+    std::vector<uint8_t> crit_vec = ReadFileToVec(crit_file_path);
+    if (crit_vec.empty()) {
+        std::cerr << "Failed to read critical file: " << crit_file_path << std::endl;
+        return false;
     }
 
-    // Clean up only the temporary output file, not the stored files
-    std::remove(temp_output_file.c_str());
+    // Read AC coefficient values from the AC noncrit file
+    std::vector<uint8_t> ac_vec = ReadFileToVec(noncrit_file_path);
+    if (ac_vec.empty()) {
+        std::cerr << "Failed to read AC noncrit file: " << noncrit_file_path << std::endl;
+        return false;
+    }
 
-    return success;
+    JPEGData jpg;
+    // Use the ReadJpeg overload that takes ac_data parameters
+    // This function will read the critical file and use the AC data to reconstruct coefficients
+    bool read_success = ReadJpeg(reinterpret_cast<const uint8_t*>(crit_vec.data()), 
+                                 crit_vec.size(),
+                                 ac_vec.data(), ac_vec.size(),
+                                 JPEG_READ_ALL, &jpg);
+    
+    if (!read_success) {
+        std::cerr << "Failed to parse critical JPEG data from " << crit_file_path << std::endl;
+        return false;
+    }
+
+    // Write the complete JPEG directly to memory
+    JPEGOutput output(GuetzliStringOut, &jpeg_data);
+    
+    // Write as a complete JPEG (not split) - pass nullptr for split_merge_opts
+    if (!WriteJpeg(jpg, false, output, nullptr)) {
+        std::cerr << "Failed to write merged JPEG data." << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 }  // namespace guetzli
