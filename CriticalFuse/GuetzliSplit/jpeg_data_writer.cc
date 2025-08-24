@@ -426,7 +426,9 @@ bool EncodeScan(const JPEGData& jpg,
   return !bw.overflow;
 }
 
-std::vector<uint8_t> ReadFileToVec(const std::string& path) {
+}  // namespace guetzli
+
+std::vector<uint8_t> guetzli::ReadFileToVec(const std::string& path) {
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return {};
     fseek(f, 0, SEEK_END);
