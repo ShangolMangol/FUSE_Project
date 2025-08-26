@@ -353,10 +353,15 @@ class StorageOverheadAnalyzer:
         # File Type Breakdown Analysis
         plt.figure(figsize=(14, 8))
         
-        # Group by file extensions
+        # Group by file extensions, merging JPEG variants
         extension_groups = {}
         for result in analysis_results:
             ext = Path(result['filename']).suffix.lower()
+            
+            # Merge JPEG variants (.jpg and .jpeg) into a single group
+            if ext in ['.jpg', '.jpeg']:
+                ext = '.jpg'  # Use .jpg as the canonical extension
+            
             if ext not in extension_groups:
                 extension_groups[ext] = []
             extension_groups[ext].append(result['overhead_percentage'])
@@ -391,10 +396,15 @@ class StorageOverheadAnalyzer:
     def create_file_type_specific_graphs(self, analysis_results: List[Dict]):
         """Create separate detailed graphs for each file type."""
         
-        # Group results by file extension
+        # Group results by file extension, merging JPEG variants
         extension_groups = {}
         for result in analysis_results:
             ext = Path(result['filename']).suffix.lower()
+            
+            # Merge JPEG variants (.jpg and .jpeg) into a single group
+            if ext in ['.jpg', '.jpeg']:
+                ext = '.jpg'  # Use .jpg as the canonical extension
+            
             if ext not in extension_groups:
                 extension_groups[ext] = []
             extension_groups[ext].append(result)
