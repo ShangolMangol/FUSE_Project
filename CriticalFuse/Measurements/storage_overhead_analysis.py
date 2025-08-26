@@ -116,8 +116,10 @@ class StorageOverheadAnalyzer:
         try:
             dest_path = self.mounted_folder / source_file.name
             
-            # Copy file to mounted folder
-            shutil.copy2(source_file, dest_path)
+            # Read the source file and write it directly to the mounted folder
+            with open(source_file, 'rb') as src:
+                with open(dest_path, 'wb') as dst:
+                    dst.write(src.read())
             
             # Wait a moment for FUSE to process the file
             time.sleep(0.5)
