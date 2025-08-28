@@ -1328,11 +1328,30 @@ class StorageOverheadAnalyzer:
         bottom_crit_noncrit_mapping = [bottom_crit_noncrit[i] + mapping_percentages[i] for i in range(len(filenames))]
         p4 = ax1.bar(x_pos, other_percentages, bottom=bottom_crit_noncrit_mapping, alpha=0.8, color='orange', label='Other')
         
-        # Add value labels on bars (show total percentage for each file)
-        total_percentages = [crit_percentages[i] + noncrit_percentages[i] + mapping_percentages[i] + other_percentages[i] for i in range(len(filenames))]
-        for i, (x, y) in enumerate(zip(x_pos, total_percentages)):
-            if y > 1:  # Only show label if bar is large enough
-                ax1.text(x, y + 0.1, f'{y:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=8)
+        # Add value labels on each segment of the stacked bars
+        for i, x in enumerate(x_pos):
+            # Critical segment label
+            if crit_percentages[i] > 5:  # Only show if segment is large enough
+                ax1.text(x, crit_percentages[i]/2, f'{crit_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
+            
+            # Non-critical segment label
+            if noncrit_percentages[i] > 5:
+                bottom_pos = crit_percentages[i] + noncrit_percentages[i]/2
+                ax1.text(x, bottom_pos, f'{noncrit_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
+            
+            # Mapping segment label
+            if mapping_percentages[i] > 5:
+                bottom_pos = crit_percentages[i] + noncrit_percentages[i] + mapping_percentages[i]/2
+                ax1.text(x, bottom_pos, f'{mapping_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
+            
+            # Other segment label
+            if other_percentages[i] > 5:
+                bottom_pos = crit_percentages[i] + noncrit_percentages[i] + mapping_percentages[i] + other_percentages[i]/2
+                ax1.text(x, bottom_pos, f'{other_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
         
         ax1.set_xlabel('Files (sorted by storage size)', fontsize=12)
         ax1.set_ylabel('Storage Composition (%)', fontsize=12)
@@ -1357,10 +1376,30 @@ class StorageOverheadAnalyzer:
         left_crit_noncrit_mapping = [left_crit_noncrit[i] + mapping_percentages[i] for i in range(len(filenames))]
         p4_h = ax2.barh(y_pos, other_percentages, left=left_crit_noncrit_mapping, alpha=0.8, color='orange', label='Other')
         
-        # Add value labels on horizontal bars
-        for i, (y, total_pct) in enumerate(zip(y_pos, total_percentages)):
-            if total_pct > 0.5:  # Only show label if bar is large enough
-                ax2.text(total_pct + 0.1, y, f'{total_pct:.1f}%', va='center', fontweight='bold', fontsize=8)
+        # Add value labels on each segment of the horizontal stacked bars
+        for i, y in enumerate(y_pos):
+            # Critical segment label
+            if crit_percentages[i] > 5:  # Only show if segment is large enough
+                ax2.text(crit_percentages[i]/2, y, f'{crit_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
+            
+            # Non-critical segment label
+            if noncrit_percentages[i] > 5:
+                left_pos = crit_percentages[i] + noncrit_percentages[i]/2
+                ax2.text(left_pos, y, f'{noncrit_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
+            
+            # Mapping segment label
+            if mapping_percentages[i] > 5:
+                left_pos = crit_percentages[i] + noncrit_percentages[i] + mapping_percentages[i]/2
+                ax2.text(left_pos, y, f'{mapping_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
+            
+            # Other segment label
+            if other_percentages[i] > 5:
+                left_pos = crit_percentages[i] + noncrit_percentages[i] + mapping_percentages[i] + other_percentages[i]/2
+                ax2.text(left_pos, y, f'{other_percentages[i]:.1f}%', 
+                        ha='center', va='center', fontweight='bold', fontsize=7, color='white')
         
         ax2.set_ylabel('Files (sorted by storage size)', fontsize=12)
         ax2.set_xlabel('Storage Composition (%)', fontsize=12)
@@ -1399,6 +1438,16 @@ class StorageOverheadAnalyzer:
         mapping_percentage = (total_mapping_mb / total_storage_mb) * 100
         other_percentage = (total_other_mb / total_storage_mb) * 100
         
+        # Calculate mean percentages across all files
+        mean_crit_pct = np.mean([(crit_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                               for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+        mean_noncrit_pct = np.mean([(noncrit_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                  for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+        mean_mapping_pct = np.mean([(mapping_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                  for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+        mean_other_pct = np.mean([(other_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+        
         # Create composition statistics
         composition_stats = {
             'Total Storage (MB)': total_storage_mb,
@@ -1423,6 +1472,12 @@ class StorageOverheadAnalyzer:
                     'Percentage': other_percentage,
                     'Average per File (MB)': total_other_mb / len(sorted_results) if sorted_results else 0
                 }
+            },
+            'Mean Composition Across Files': {
+                'Critical Files Mean (%)': mean_crit_pct,
+                'Non-Critical Files Mean (%)': mean_noncrit_pct,
+                'Mapping Files Mean (%)': mean_mapping_pct,
+                'Other Files Mean (%)': mean_other_pct
             },
             'File-by-File Breakdown': []
         }
@@ -1476,6 +1531,42 @@ class StorageOverheadAnalyzer:
                 mapping_pct = (mapping_sizes[i-1] / file_total) * 100 if file_total > 0 else 0
                 f.write(f"{i:2d}. {result['filename']:<30} {result['total_storage_mb']:8.2f} MB ({total_pct:5.1f}% of total)\n")
                 f.write(f"    Critical: {crit_sizes[i-1]:6.2f} MB ({crit_pct:5.1f}%), Non-Critical: {noncrit_sizes[i-1]:6.2f} MB ({noncrit_pct:5.1f}%), Mapping: {mapping_sizes[i-1]:6.2f} MB ({mapping_pct:5.1f}%)\n")
+            
+            # Add conclusion section with mean percentages
+            f.write("\n" + "="*60 + "\n")
+            f.write("CONCLUSION - MEAN STORAGE COMPOSITION\n")
+            f.write("="*60 + "\n\n")
+            
+            # Calculate mean percentages across all files
+            mean_crit_pct = np.mean([(crit_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                   for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+            mean_noncrit_pct = np.mean([(noncrit_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                      for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+            mean_mapping_pct = np.mean([(mapping_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                      for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+            mean_other_pct = np.mean([(other_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 
+                                    for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0])
+            
+            f.write("Average Storage Composition Across All Files:\n")
+            f.write(f"  Critical Files:     {mean_crit_pct:6.1f}% ± {np.std([(crit_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0]):5.1f}%\n")
+            f.write(f"  Non-Critical Files: {mean_noncrit_pct:6.1f}% ± {np.std([(noncrit_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0]):5.1f}%\n")
+            f.write(f"  Mapping Files:      {mean_mapping_pct:6.1f}% ± {np.std([(mapping_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0]):5.1f}%\n")
+            f.write(f"  Other Files:        {mean_other_pct:6.1f}% ± {np.std([(other_sizes[i] / sorted_results[i]['total_storage_mb']) * 100 for i in range(len(sorted_results)) if sorted_results[i]['total_storage_mb'] > 0]):5.1f}%\n\n")
+            
+            f.write("Key Insights:\n")
+            f.write(f"  • Critical data represents {mean_crit_pct:.1f}% of each file's storage on average\n")
+            f.write(f"  • Non-critical data represents {mean_noncrit_pct:.1f}% of each file's storage on average\n")
+            f.write(f"  • Mapping overhead is {mean_mapping_pct:.1f}% of each file's storage on average\n")
+            
+            if mean_crit_pct > mean_noncrit_pct:
+                f.write(f"  • Critical data dominates storage ({mean_crit_pct:.1f}% vs {mean_noncrit_pct:.1f}% non-critical)\n")
+            else:
+                f.write(f"  • Non-critical data dominates storage ({mean_noncrit_pct:.1f}% vs {mean_crit_pct:.1f}% critical)\n")
+            
+            if mean_mapping_pct > 10:
+                f.write(f"  • Mapping overhead is significant ({mean_mapping_pct:.1f}%) and could be optimized\n")
+            else:
+                f.write(f"  • Mapping overhead is reasonable ({mean_mapping_pct:.1f}%)\n")
         
         print(f"Storage composition statistics saved to: {stats_file}")
         
