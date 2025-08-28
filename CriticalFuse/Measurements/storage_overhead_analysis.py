@@ -171,7 +171,7 @@ class StorageOverheadAnalyzer:
     
     def detect_jpeg_type(self, file_path: Path) -> str:
         """
-        Detect if a JPEG file is progressive or baseline.
+        Detect if a JPEG file is progressive or baseline using ImageMagick identify command.
         
         Args:
             file_path: Path to JPEG file
@@ -180,27 +180,127 @@ class StorageOverheadAnalyzer:
             'progressive', 'baseline', or 'unknown'
         """
         try:
-            with open(file_path, 'rb') as f:
-                data = f.read(1024)  # Read first 1KB to check for progressive markers
+            import subprocess
+            
+            # Use ImageMagick identify command to get interlace information
+            result = subprocess.run(
+                ['identify', '-verbose', str(file_path)],
+                capture_output=True,
+                text=True,
+                timeout=10  # 10 second timeout
+            )
+            
+            if result.returncode == 0:
+                # Look for Interlace line in the output
+                for line in result.stdout.split('\n'):
+                    if 'Interlace:' in line:
+                        interlace_value = line.split('Interlace:')[1].strip()
+                        if interlace_value == 'Line':
+                            return 'progressive'
+                        elif interlace_value == 'No':
+                            return 'baseline'
+                        else:
+                            return 'unknown'
                 
-                # Look for progressive JPEG markers (0xFFC2)
-                if b'\xFF\xC2' in data:
-                    return 'progressive'
-                # Look for baseline JPEG markers (0xFFC0, 0xFFC1)
-                elif b'\xFF\xC0' in data or b'\xFF\xC1' in data:
-                    return 'baseline'
-                else:
-                    return 'unknown'
+                # If no Interlace line found, assume baseline
+                return 'baseline'
+            else:
+                print(f"ImageMagick identify failed for {file_path.name}: {result.stderr}")
+                return 'unknown'
+                
+        except subprocess.TimeoutExpired:
+            print(f"ImageMagick identify timeout for {file_path.name}")
+            return 'unknown'
+        except FileNotFoundError:
+            print("ImageMagick 'identify' command not found. Please install ImageMagick.")
+            return 'unknown'
         except Exception as e:
             print(f"Error detecting JPEG type for {file_path.name}: {e}")
             return 'unknown'
 
-    def calculate_storage_overhead(self, source_file: Path) -> Dict:
+    def batch_detect_jpeg_types(self, jpeg_files: List[Path]) -> Dict[str, str]:
+        """
+        Efficiently detect JPEG types for multiple files using a single ImageMagick command.
+        
+        Args:
+            jpeg_files: List of JPEG file paths
+            
+        Returns:
+            Dictionary mapping filename to JPEG type
+        """
+        jpeg_types = {}
+        
+        if not jpeg_files:
+            return jpeg_types
+        
+        try:
+            import subprocess
+            
+            # Use ImageMagick identify command on all files at once
+            file_paths = [str(f) for f in jpeg_files]
+            result = subprocess.run(
+                ['identify', '-verbose'] + file_paths,
+                capture_output=True,
+                text=True,
+                timeout=30  # Longer timeout for multiple files
+            )
+            
+            if result.returncode == 0:
+                current_file = None
+                for line in result.stdout.split('\n'):
+                    # Check if this line contains a filename
+                    if any(f.name in line for f in jpeg_files):
+                        # Extract filename from the line
+                        for f in jpeg_files:
+                            if f.name in line:
+                                current_file = f.name
+                                break
+                    elif 'Interlace:' in line and current_file:
+                        interlace_value = line.split('Interlace:')[1].strip()
+                        if interlace_value == 'Line':
+                            jpeg_types[current_file] = 'progressive'
+                        elif interlace_value == 'No':
+                            jpeg_types[current_file] = 'baseline'
+                        else:
+                            jpeg_types[current_file] = 'unknown'
+                        current_file = None
+                
+                # Set default for any files not found in output
+                for f in jpeg_files:
+                    if f.name not in jpeg_types:
+                        jpeg_types[f.name] = 'baseline'  # Default assumption
+                        
+            else:
+                print(f"ImageMagick identify failed: {result.stderr}")
+                # Fallback to individual detection
+                for f in jpeg_files:
+                    jpeg_types[f.name] = self.detect_jpeg_type(f)
+                    
+        except subprocess.TimeoutExpired:
+            print("ImageMagick identify timeout for batch processing")
+            # Fallback to individual detection
+            for f in jpeg_files:
+                jpeg_types[f.name] = self.detect_jpeg_type(f)
+        except FileNotFoundError:
+            print("ImageMagick 'identify' command not found. Please install ImageMagick.")
+            # Fallback to individual detection
+            for f in jpeg_files:
+                jpeg_types[f.name] = self.detect_jpeg_type(f)
+        except Exception as e:
+            print(f"Error in batch JPEG type detection: {e}")
+            # Fallback to individual detection
+            for f in jpeg_files:
+                jpeg_types[f.name] = self.detect_jpeg_type(f)
+        
+        return jpeg_types
+
+    def calculate_storage_overhead(self, source_file: Path, jpeg_type: str = None) -> Dict:
         """
         Calculate storage overhead for a single file.
         
         Args:
             source_file: Path to source file
+            jpeg_type: Pre-detected JPEG type (optional)
             
         Returns:
             Dictionary with storage overhead analysis
@@ -210,11 +310,14 @@ class StorageOverheadAnalyzer:
         # Get original file size
         original_size = source_file.stat().st_size
         
-        # Detect JPEG type if it's a JPEG file
-        jpeg_type = 'unknown'
-        if source_file.suffix.lower() in ['.jpg', '.jpeg']:
+        # Use provided JPEG type or detect if needed
+        if jpeg_type is None and source_file.suffix.lower() in ['.jpg', '.jpeg']:
             jpeg_type = self.detect_jpeg_type(source_file)
             print(f"  JPEG type detected: {jpeg_type}")
+        elif jpeg_type is not None:
+            print(f"  JPEG type: {jpeg_type}")
+        else:
+            jpeg_type = 'unknown'
         
         # Write file to mounted folder
         if not self.write_file_to_mount(source_file):
@@ -431,6 +534,9 @@ class StorageOverheadAnalyzer:
         
         # Create storage percentage breakdown chart
         self.create_storage_percentage_chart(analysis_results)
+        
+        # Create stacked storage composition chart
+        self.create_stacked_storage_composition_chart(analysis_results)
         
         # Summary Statistics Table
         self.create_summary_statistics(analysis_results)
@@ -1135,6 +1241,225 @@ class StorageOverheadAnalyzer:
         
         print(f"Storage usage summary (JSON) saved to: {summary_json}")
     
+    def create_stacked_storage_composition_chart(self, analysis_results: List[Dict]):
+        """Create a stacked bar chart showing the composition of each file's storage."""
+        
+        if not analysis_results:
+            print("No data available for stacked storage composition chart")
+            return
+        
+        # Calculate total storage used
+        total_storage_mb = sum(r['total_storage_mb'] for r in analysis_results)
+        
+        if total_storage_mb == 0:
+            print("Total storage is zero, cannot create composition chart")
+            return
+        
+        # Sort files by total storage size (largest first)
+        sorted_results = sorted(analysis_results, key=lambda x: x['total_storage_mb'], reverse=True)
+        
+        # Extract data for plotting
+        filenames = [r['filename'] for r in sorted_results]
+        
+        # Calculate storage composition for each file
+        crit_sizes = []
+        noncrit_sizes = []
+        mapping_sizes = []
+        other_sizes = []
+        
+        for result in sorted_results:
+            crit_size = 0
+            noncrit_size = 0
+            mapping_size = 0
+            other_size = 0
+            
+            # Analyze each related file to determine its type and size
+            for file_info in result['related_files']:
+                filename = file_info['filename']
+                size_mb = file_info['size_mb']
+                
+                if '.crit' in filename:
+                    crit_size += size_mb
+                elif '.noncrit' in filename or '.ac.noncrit' in filename:
+                    noncrit_size += size_mb
+                elif '.mapping' in filename:
+                    mapping_size += size_mb
+                else:
+                    other_size += size_mb
+            
+            crit_sizes.append(crit_size)
+            noncrit_sizes.append(noncrit_size)
+            mapping_sizes.append(mapping_size)
+            other_sizes.append(other_size)
+        
+        # Convert to percentages of total storage
+        crit_percentages = [(size / total_storage_mb) * 100 for size in crit_sizes]
+        noncrit_percentages = [(size / total_storage_mb) * 100 for size in noncrit_sizes]
+        mapping_percentages = [(size / total_storage_mb) * 100 for size in mapping_sizes]
+        other_percentages = [(size / total_storage_mb) * 100 for size in other_sizes]
+        
+        # Create the stacked bar chart
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
+        
+        # Plot 1: Stacked bar chart showing composition
+        x_pos = range(len(filenames))
+        
+        # Create stacked bars
+        p1 = ax1.bar(x_pos, crit_percentages, alpha=0.8, color='blue', label='Critical (.crit)')
+        p2 = ax1.bar(x_pos, noncrit_percentages, bottom=crit_percentages, alpha=0.8, color='red', label='Non-Critical (.noncrit)')
+        
+        # Calculate bottom positions for mapping and other
+        bottom_crit_noncrit = [crit_percentages[i] + noncrit_percentages[i] for i in range(len(filenames))]
+        p3 = ax1.bar(x_pos, mapping_percentages, bottom=bottom_crit_noncrit, alpha=0.8, color='green', label='Mapping (.mapping)')
+        
+        bottom_crit_noncrit_mapping = [bottom_crit_noncrit[i] + mapping_percentages[i] for i in range(len(filenames))]
+        p4 = ax1.bar(x_pos, other_percentages, bottom=bottom_crit_noncrit_mapping, alpha=0.8, color='orange', label='Other')
+        
+        # Add value labels on bars (show total percentage for each file)
+        total_percentages = [crit_percentages[i] + noncrit_percentages[i] + mapping_percentages[i] + other_percentages[i] for i in range(len(filenames))]
+        for i, (x, y) in enumerate(zip(x_pos, total_percentages)):
+            if y > 1:  # Only show label if bar is large enough
+                ax1.text(x, y + 0.1, f'{y:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=8)
+        
+        ax1.set_xlabel('Files (sorted by storage size)', fontsize=12)
+        ax1.set_ylabel('Storage Percentage of Total (%)', fontsize=12)
+        ax1.set_title(f'Storage Composition Breakdown - Each File as % of Total Storage ({total_storage_mb:.2f} MB)', 
+                     fontsize=14, fontweight='bold')
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels([f.split('.')[0] for f in filenames], rotation=45, ha='right')
+        ax1.legend(loc='upper right')
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # Plot 2: Horizontal stacked bar chart for better readability
+        y_pos = range(len(filenames))
+        
+        # Create horizontal stacked bars
+        p1_h = ax2.barh(y_pos, crit_percentages, alpha=0.8, color='blue', label='Critical (.crit)')
+        p2_h = ax2.barh(y_pos, noncrit_percentages, left=crit_percentages, alpha=0.8, color='red', label='Non-Critical (.noncrit)')
+        
+        # Calculate left positions for mapping and other
+        left_crit_noncrit = [crit_percentages[i] + noncrit_percentages[i] for i in range(len(filenames))]
+        p3_h = ax2.barh(y_pos, mapping_percentages, left=left_crit_noncrit, alpha=0.8, color='green', label='Mapping (.mapping)')
+        
+        left_crit_noncrit_mapping = [left_crit_noncrit[i] + mapping_percentages[i] for i in range(len(filenames))]
+        p4_h = ax2.barh(y_pos, other_percentages, left=left_crit_noncrit_mapping, alpha=0.8, color='orange', label='Other')
+        
+        # Add value labels on horizontal bars
+        for i, (y, total_pct) in enumerate(zip(y_pos, total_percentages)):
+            if total_pct > 0.5:  # Only show label if bar is large enough
+                ax2.text(total_pct + 0.1, y, f'{total_pct:.1f}%', va='center', fontweight='bold', fontsize=8)
+        
+        ax2.set_ylabel('Files (sorted by storage size)', fontsize=12)
+        ax2.set_xlabel('Storage Percentage of Total (%)', fontsize=12)
+        ax2.set_title('Storage Composition Breakdown - Horizontal View', fontsize=14, fontweight='bold')
+        ax2.set_yticks(y_pos)
+        ax2.set_yticklabels([f.split('.')[0] for f in filenames])
+        ax2.legend(loc='lower right')
+        ax2.grid(True, alpha=0.3, axis='x')
+        
+        plt.tight_layout()
+        
+        # Save the chart
+        composition_chart_path = self.graphs_dir / "stacked_storage_composition.png"
+        plt.savefig(composition_chart_path, dpi=300, bbox_inches='tight')
+        print(f"Stacked storage composition chart saved to: {composition_chart_path}")
+        plt.close()
+        
+        # Create detailed composition statistics
+        self.create_storage_composition_statistics(sorted_results, total_storage_mb, 
+                                                 crit_sizes, noncrit_sizes, mapping_sizes, other_sizes)
+    
+    def create_storage_composition_statistics(self, sorted_results: List[Dict], total_storage_mb: float,
+                                            crit_sizes: List[float], noncrit_sizes: List[float], 
+                                            mapping_sizes: List[float], other_sizes: List[float]):
+        """Create detailed statistics about storage composition."""
+        
+        # Calculate totals for each component
+        total_crit_mb = sum(crit_sizes)
+        total_noncrit_mb = sum(noncrit_sizes)
+        total_mapping_mb = sum(mapping_sizes)
+        total_other_mb = sum(other_sizes)
+        
+        # Calculate percentages
+        crit_percentage = (total_crit_mb / total_storage_mb) * 100
+        noncrit_percentage = (total_noncrit_mb / total_storage_mb) * 100
+        mapping_percentage = (total_mapping_mb / total_storage_mb) * 100
+        other_percentage = (total_other_mb / total_storage_mb) * 100
+        
+        # Create composition statistics
+        composition_stats = {
+            'Total Storage (MB)': total_storage_mb,
+            'Storage Composition': {
+                'Critical Files (.crit)': {
+                    'Size (MB)': total_crit_mb,
+                    'Percentage': crit_percentage,
+                    'Average per File (MB)': total_crit_mb / len(sorted_results) if sorted_results else 0
+                },
+                'Non-Critical Files (.noncrit)': {
+                    'Size (MB)': total_noncrit_mb,
+                    'Percentage': noncrit_percentage,
+                    'Average per File (MB)': total_noncrit_mb / len(sorted_results) if sorted_results else 0
+                },
+                'Mapping Files (.mapping)': {
+                    'Size (MB)': total_mapping_mb,
+                    'Percentage': mapping_percentage,
+                    'Average per File (MB)': total_mapping_mb / len(sorted_results) if sorted_results else 0
+                },
+                'Other Files': {
+                    'Size (MB)': total_other_mb,
+                    'Percentage': other_percentage,
+                    'Average per File (MB)': total_other_mb / len(sorted_results) if sorted_results else 0
+                }
+            },
+            'File-by-File Breakdown': []
+        }
+        
+        # Add individual file breakdowns
+        for i, result in enumerate(sorted_results):
+            file_breakdown = {
+                'filename': result['filename'],
+                'total_storage_mb': result['total_storage_mb'],
+                'total_percentage': (result['total_storage_mb'] / total_storage_mb) * 100,
+                'components': {
+                    'critical_mb': crit_sizes[i],
+                    'noncritical_mb': noncrit_sizes[i],
+                    'mapping_mb': mapping_sizes[i],
+                    'other_mb': other_sizes[i]
+                }
+            }
+            composition_stats['File-by-File Breakdown'].append(file_breakdown)
+        
+        # Save statistics to file
+        stats_file = self.graphs_dir / "storage_composition_statistics.txt"
+        with open(stats_file, 'w') as f:
+            f.write("Storage Composition Statistics\n")
+            f.write("=" * 40 + "\n\n")
+            
+            f.write(f"Total Storage: {total_storage_mb:.2f} MB\n")
+            f.write(f"Total Files: {len(sorted_results)}\n\n")
+            
+            f.write("Storage Composition:\n")
+            for component, data in composition_stats['Storage Composition'].items():
+                f.write(f"{component}:\n")
+                f.write(f"  Size: {data['Size (MB)']:.2f} MB\n")
+                f.write(f"  Percentage: {data['Percentage']:.1f}%\n")
+                f.write(f"  Average per File: {data['Average per File (MB)']:.2f} MB\n\n")
+            
+            f.write("Top 10 Files by Storage Size:\n")
+            for i, result in enumerate(sorted_results[:10], 1):
+                total_pct = (result['total_storage_mb'] / total_storage_mb) * 100
+                f.write(f"{i:2d}. {result['filename']:<30} {result['total_storage_mb']:8.2f} MB ({total_pct:5.1f}%)\n")
+                f.write(f"    Critical: {crit_sizes[i-1]:6.2f} MB, Non-Critical: {noncrit_sizes[i-1]:6.2f} MB, Mapping: {mapping_sizes[i-1]:6.2f} MB\n")
+        
+        print(f"Storage composition statistics saved to: {stats_file}")
+        
+        # Also save as JSON
+        stats_json = self.graphs_dir / "storage_composition_statistics.json"
+        with open(stats_json, 'w') as f:
+            json.dump(composition_stats, f, indent=2)
+        
+        print(f"Storage composition statistics (JSON) saved to: {stats_json}")
+    
     def create_file_type_statistics(self, file_ext: str, file_results: List[Dict]):
         """Create summary statistics for a specific file type."""
         
@@ -1288,10 +1613,26 @@ class StorageOverheadAnalyzer:
             print("No files found in the source folder!")
             return
         
+        # Batch detect JPEG types for efficiency
+        jpeg_files = [f for f in source_files if f.suffix.lower() in ['.jpg', '.jpeg']]
+        if jpeg_files:
+            print(f"\nDetecting JPEG types for {len(jpeg_files)} files...")
+            jpeg_types = self.batch_detect_jpeg_types(jpeg_files)
+            print(f"JPEG type detection complete: {sum(1 for t in jpeg_types.values() if t == 'progressive')} progressive, {sum(1 for t in jpeg_types.values() if t == 'baseline')} baseline")
+        else:
+            jpeg_types = {}
+        
         # Analyze each file
         for i, source_file in enumerate(source_files, 1):
             print(f"\nAnalyzing file {i}/{len(source_files)}: {source_file.name}")
-            file_results = self.calculate_storage_overhead(source_file)
+            
+            # Use pre-detected JPEG type if available
+            if source_file.name in jpeg_types:
+                jpeg_type = jpeg_types[source_file.name]
+            else:
+                jpeg_type = 'unknown'
+            
+            file_results = self.calculate_storage_overhead(source_file, jpeg_type)
             
             if file_results:
                 self.results['tests'].append(file_results)
