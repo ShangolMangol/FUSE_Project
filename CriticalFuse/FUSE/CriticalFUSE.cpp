@@ -181,6 +181,14 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
         }
         stbuf->st_size = totalSize;
 
+        // Set the timestamps to match the mapping file
+        struct stat mapping_stat;
+        if (stat(mappingPath.c_str(), &mapping_stat) == 0) {
+            stbuf->st_atime = mapping_stat.st_atime;  // Access time
+            stbuf->st_mtime = mapping_stat.st_mtime;  // Modification time
+            stbuf->st_ctime = mapping_stat.st_ctime;  // Change time
+        }
+
         return 0;
     }
 
