@@ -6,12 +6,16 @@ This script compares the performance of file operations between a mounted FUSE f
 and a regular folder. It measures read and write times for JPEG images and generates
 comparison graphs showing the performance differences.
 
+The script includes file display simulation during read operations to measure complete
+read time including display overhead, providing more realistic performance measurements.
+
 Usage:
     python3 jpeg_performance_test.py <test_images_folder> <regular_folder> <mounted_folder> [options]
 
 Examples:
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ --output-dir ./performance_results
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --output results.json
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-display
 """
 
 import os
@@ -31,7 +35,7 @@ import numpy as np
 
 class CriticalFUSEPerformanceTester:
     def __init__(self, test_images_folder: str, regular_folder: str, mounted_folder: str, 
-                 output_dir: str, output_file: str = None):
+                 output_dir: str, output_file: str = None, simulate_display: bool = True):
         """
         Initialize the performance tester.
         
@@ -41,12 +45,14 @@ class CriticalFUSEPerformanceTester:
             mounted_folder: Path to mounted FUSE folder for comparison
             output_dir: Path to output directory for results
             output_file: Optional path to save results JSON
+            simulate_display: Whether to simulate file display operations during read
         """
         self.test_images_folder = Path(test_images_folder)
         self.regular_folder = Path(regular_folder)
         self.mounted_folder = Path(mounted_folder)
         self.output_dir = Path(output_dir)
         self.output_file = output_file
+        self.simulate_display = simulate_display
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -134,7 +140,68 @@ class CriticalFUSEPerformanceTester:
         """Read a file including open/close operations and return its size."""
         with open(file_path, 'rb') as f:
             data = f.read()
+        
+        # Display the file to measure complete read time including display overhead
+        if self.simulate_display:
+            self.display_file(file_path, data)
+        
         return len(data)
+    
+    def display_file(self, file_path: Path, data: bytes):
+        """Display file information to simulate display overhead in read time measurement."""
+        try:
+            # Simulate display operations that would occur when showing file to user
+            file_size = len(data)
+            file_ext = file_path.suffix.lower()
+            
+            # Basic file info display (simulating what a file manager might show)
+            print(f"    Displaying: {file_path.name} ({file_size:,} bytes)")
+            
+            # For JPEG files, simulate image metadata extraction/display
+            if file_ext in ['.jpg', '.jpeg']:
+                self.simulate_jpeg_display(data)
+            elif file_ext == '.png':
+                self.simulate_png_display(data)
+            elif file_ext == '.bmp':
+                self.simulate_bmp_display(data)
+            else:
+                # Generic file display simulation
+                self.simulate_generic_display(data)
+                
+        except Exception as e:
+            print(f"    Display error for {file_path.name}: {e}")
+    
+    def simulate_jpeg_display(self, data: bytes):
+        """Simulate JPEG image display operations."""
+        # Simulate JPEG header parsing for display
+        if len(data) >= 2:
+            if data[0] == 0xFF and data[1] == 0xD8:  # JPEG SOI marker
+                print(f"      JPEG image detected")
+                # Simulate metadata extraction time
+                time.sleep(0.001)  # 1ms overhead for JPEG processing
+    
+    def simulate_png_display(self, data: bytes):
+        """Simulate PNG image display operations."""
+        # Simulate PNG signature check
+        png_signature = b'\x89PNG\r\n\x1a\n'
+        if data.startswith(png_signature):
+            print(f"      PNG image detected")
+            # Simulate PNG header parsing
+            time.sleep(0.001)  # 1ms overhead for PNG processing
+    
+    def simulate_bmp_display(self, data: bytes):
+        """Simulate BMP image display operations."""
+        # Simulate BMP signature check
+        if len(data) >= 2 and data[0] == ord('B') and data[1] == ord('M'):
+            print(f"      BMP image detected")
+            # Simulate BMP header parsing
+            time.sleep(0.001)  # 1ms overhead for BMP processing
+    
+    def simulate_generic_display(self, data: bytes):
+        """Simulate generic file display operations."""
+        # Simulate basic file type detection and display
+        print(f"      Generic file ({len(data)} bytes)")
+        time.sleep(0.0005)  # 0.5ms overhead for generic processing
     
     def test_folder_performance(self, folder_path: Path, jpeg_files: List[Path], folder_type: str) -> Dict:
         """Test read/write performance for a specific folder."""
@@ -501,6 +568,7 @@ class CriticalFUSEPerformanceTester:
         print(f"Test images folder: {self.test_images_folder}")
         print(f"Regular folder: {self.regular_folder}")
         print(f"Mounted folder: {self.mounted_folder}")
+        print(f"Display simulation: {'Enabled' if self.simulate_display else 'Disabled'}")
         
         # Find JPEG files
         jpeg_files = self.find_jpeg_files()
@@ -541,6 +609,7 @@ def main():
     parser.add_argument('--output-dir', '-o', required=True, help='Path to output directory for results')
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
+    parser.add_argument('--no-display', action='store_true', help='Skip file display simulation during read operations')
     
     args = parser.parse_args()
     
@@ -554,8 +623,9 @@ def main():
         return 1
     
     # Create tester and run tests
+    simulate_display = not args.no_display
     tester = CriticalFUSEPerformanceTester(args.test_images_folder, args.regular_folder, 
-                                          args.mounted_folder, args.output_dir, args.output)
+                                          args.mounted_folder, args.output_dir, args.output, simulate_display)
     
     try:
         tester.run_tests()
