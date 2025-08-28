@@ -1292,11 +1292,24 @@ class StorageOverheadAnalyzer:
             mapping_sizes.append(mapping_size)
             other_sizes.append(other_size)
         
-        # Convert to percentages of total storage
-        crit_percentages = [(size / total_storage_mb) * 100 for size in crit_sizes]
-        noncrit_percentages = [(size / total_storage_mb) * 100 for size in noncrit_sizes]
-        mapping_percentages = [(size / total_storage_mb) * 100 for size in mapping_sizes]
-        other_percentages = [(size / total_storage_mb) * 100 for size in other_sizes]
+        # Convert to percentages of each file's own storage
+        crit_percentages = []
+        noncrit_percentages = []
+        mapping_percentages = []
+        other_percentages = []
+        
+        for i, result in enumerate(sorted_results):
+            file_total_mb = result['total_storage_mb']
+            if file_total_mb > 0:
+                crit_percentages.append((crit_sizes[i] / file_total_mb) * 100)
+                noncrit_percentages.append((noncrit_sizes[i] / file_total_mb) * 100)
+                mapping_percentages.append((mapping_sizes[i] / file_total_mb) * 100)
+                other_percentages.append((other_sizes[i] / file_total_mb) * 100)
+            else:
+                crit_percentages.append(0)
+                noncrit_percentages.append(0)
+                mapping_percentages.append(0)
+                other_percentages.append(0)
         
         # Create the stacked bar chart
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
@@ -1322,8 +1335,8 @@ class StorageOverheadAnalyzer:
                 ax1.text(x, y + 0.1, f'{y:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=8)
         
         ax1.set_xlabel('Files (sorted by storage size)', fontsize=12)
-        ax1.set_ylabel('Storage Percentage of Total (%)', fontsize=12)
-        ax1.set_title(f'Storage Composition Breakdown - Each File as % of Total Storage ({total_storage_mb:.2f} MB)', 
+        ax1.set_ylabel('Storage Composition (%)', fontsize=12)
+        ax1.set_title(f'File Storage Composition - Each File\'s Internal Breakdown ({total_storage_mb:.2f} MB Total)', 
                      fontsize=14, fontweight='bold')
         ax1.set_xticks(x_pos)
         ax1.set_xticklabels([f.split('.')[0] for f in filenames], rotation=45, ha='right')
@@ -1350,8 +1363,8 @@ class StorageOverheadAnalyzer:
                 ax2.text(total_pct + 0.1, y, f'{total_pct:.1f}%', va='center', fontweight='bold', fontsize=8)
         
         ax2.set_ylabel('Files (sorted by storage size)', fontsize=12)
-        ax2.set_xlabel('Storage Percentage of Total (%)', fontsize=12)
-        ax2.set_title('Storage Composition Breakdown - Horizontal View', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Storage Composition (%)', fontsize=12)
+        ax2.set_title('File Storage Composition - Horizontal View', fontsize=14, fontweight='bold')
         ax2.set_yticks(y_pos)
         ax2.set_yticklabels([f.split('.')[0] for f in filenames])
         ax2.legend(loc='lower right')
@@ -1416,15 +1429,20 @@ class StorageOverheadAnalyzer:
         
         # Add individual file breakdowns
         for i, result in enumerate(sorted_results):
+            file_total_mb = result['total_storage_mb']
             file_breakdown = {
                 'filename': result['filename'],
-                'total_storage_mb': result['total_storage_mb'],
-                'total_percentage': (result['total_storage_mb'] / total_storage_mb) * 100,
+                'total_storage_mb': file_total_mb,
+                'total_percentage_of_all_storage': (file_total_mb / total_storage_mb) * 100,
                 'components': {
                     'critical_mb': crit_sizes[i],
+                    'critical_percentage': (crit_sizes[i] / file_total_mb) * 100 if file_total_mb > 0 else 0,
                     'noncritical_mb': noncrit_sizes[i],
+                    'noncritical_percentage': (noncrit_sizes[i] / file_total_mb) * 100 if file_total_mb > 0 else 0,
                     'mapping_mb': mapping_sizes[i],
-                    'other_mb': other_sizes[i]
+                    'mapping_percentage': (mapping_sizes[i] / file_total_mb) * 100 if file_total_mb > 0 else 0,
+                    'other_mb': other_sizes[i],
+                    'other_percentage': (other_sizes[i] / file_total_mb) * 100 if file_total_mb > 0 else 0
                 }
             }
             composition_stats['File-by-File Breakdown'].append(file_breakdown)
@@ -1434,6 +1452,10 @@ class StorageOverheadAnalyzer:
         with open(stats_file, 'w') as f:
             f.write("Storage Composition Statistics\n")
             f.write("=" * 40 + "\n\n")
+            
+            f.write("NOTE: Percentages in 'Storage Composition' section show each component's\n")
+            f.write("share of TOTAL storage. Percentages in 'Top 10 Files' section show each\n")
+            f.write("component's share of that SPECIFIC file's storage.\n\n")
             
             f.write(f"Total Storage: {total_storage_mb:.2f} MB\n")
             f.write(f"Total Files: {len(sorted_results)}\n\n")
@@ -1448,8 +1470,12 @@ class StorageOverheadAnalyzer:
             f.write("Top 10 Files by Storage Size:\n")
             for i, result in enumerate(sorted_results[:10], 1):
                 total_pct = (result['total_storage_mb'] / total_storage_mb) * 100
-                f.write(f"{i:2d}. {result['filename']:<30} {result['total_storage_mb']:8.2f} MB ({total_pct:5.1f}%)\n")
-                f.write(f"    Critical: {crit_sizes[i-1]:6.2f} MB, Non-Critical: {noncrit_sizes[i-1]:6.2f} MB, Mapping: {mapping_sizes[i-1]:6.2f} MB\n")
+                file_total = result['total_storage_mb']
+                crit_pct = (crit_sizes[i-1] / file_total) * 100 if file_total > 0 else 0
+                noncrit_pct = (noncrit_sizes[i-1] / file_total) * 100 if file_total > 0 else 0
+                mapping_pct = (mapping_sizes[i-1] / file_total) * 100 if file_total > 0 else 0
+                f.write(f"{i:2d}. {result['filename']:<30} {result['total_storage_mb']:8.2f} MB ({total_pct:5.1f}% of total)\n")
+                f.write(f"    Critical: {crit_sizes[i-1]:6.2f} MB ({crit_pct:5.1f}%), Non-Critical: {noncrit_sizes[i-1]:6.2f} MB ({noncrit_pct:5.1f}%), Mapping: {mapping_sizes[i-1]:6.2f} MB ({mapping_pct:5.1f}%)\n")
         
         print(f"Storage composition statistics saved to: {stats_file}")
         
