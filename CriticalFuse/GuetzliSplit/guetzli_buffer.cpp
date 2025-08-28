@@ -84,6 +84,7 @@ bool SplitJpegBuffer(const std::string& jpeg_data,
     // Set up parameters for processing
     Params params;
     params.butteraugli_target = static_cast<float>(ButteraugliScoreForQuality(95)); // Default quality
+    params.clear_metadata = false; // Preserve metadata when splitting
 
     // Process the JPEG data to split it
     std::string out_data;
