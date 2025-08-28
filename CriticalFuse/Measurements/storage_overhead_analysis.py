@@ -390,6 +390,9 @@ class StorageOverheadAnalyzer:
         # Create separate graphs for each file type
         self.create_file_type_specific_graphs(analysis_results)
         
+        # Create general actual saved storage graph for all files
+        self.create_general_saved_storage_graph(analysis_results)
+        
         # Summary Statistics Table
         self.create_summary_statistics(analysis_results)
     
@@ -536,25 +539,31 @@ class StorageOverheadAnalyzer:
         print(f"Storage efficiency analysis for {file_ext} files saved to: {efficiency_graph_path}")
         plt.close()
         
-        # Create file-by-file breakdown
+        # Create file-by-file breakdown (sorted by original file size)
         plt.figure(figsize=(14, 8))
         
-        # Create bar chart of overhead percentages
-        x_pos = range(len(filenames))
-        plt.bar(x_pos, overhead_percentages, alpha=0.7, color='orange', edgecolor='black')
+        # Sort files by original size for better visualization
+        sorted_indices = sorted(range(len(original_sizes)), key=lambda i: original_sizes[i])
+        sorted_filenames = [filenames[i] for i in sorted_indices]
+        sorted_overhead_percentages = [overhead_percentages[i] for i in sorted_indices]
+        sorted_original_sizes = [original_sizes[i] for i in sorted_indices]
+        
+        # Create bar chart of overhead percentages (sorted by file size)
+        x_pos = range(len(sorted_filenames))
+        plt.bar(x_pos, sorted_overhead_percentages, alpha=0.7, color='orange', edgecolor='black')
         
         # Add value labels on bars
-        for i, (x, y) in enumerate(zip(x_pos, overhead_percentages)):
+        for i, (x, y) in enumerate(zip(x_pos, sorted_overhead_percentages)):
             plt.text(x, y + 0.5, f'{y:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=8)
         
-        plt.xlabel('Files', fontsize=14)
+        plt.xlabel('Files (sorted by size)', fontsize=14)
         plt.ylabel('Storage Overhead (%)', fontsize=14)
-        plt.title(f'Storage Overhead by File - {file_ext.upper()} Files', fontsize=16, fontweight='bold')
-        plt.xticks(x_pos, [f.split('.')[0] for f in filenames], rotation=45, ha='right')
+        plt.title(f'Storage Overhead by File - {file_ext.upper()} Files (Sorted by Size)', fontsize=16, fontweight='bold')
+        plt.xticks(x_pos, [f.split('.')[0] for f in sorted_filenames], rotation=45, ha='right')
         plt.grid(True, alpha=0.3, axis='y')
         
         # Add statistics line
-        mean_overhead = np.mean(overhead_percentages)
+        mean_overhead = np.mean(sorted_overhead_percentages)
         plt.axhline(y=mean_overhead, color='red', linestyle='--', alpha=0.8, 
                    label=f'Mean: {mean_overhead:.1f}%')
         plt.legend()
@@ -566,8 +575,155 @@ class StorageOverheadAnalyzer:
         print(f"File breakdown analysis for {file_ext} files saved to: {breakdown_graph_path}")
         plt.close()
         
+        # Create actual saved storage graph
+        plt.figure(figsize=(14, 8))
+        
+        # Calculate actual saved storage (total storage - original size)
+        actual_saved_storage = [r['total_storage_mb'] - r['original_size_mb'] for r in file_results]
+        
+        # Sort by original file size
+        sorted_actual_saved = [actual_saved_storage[i] for i in sorted_indices]
+        
+        # Create bar chart of actual saved storage
+        x_pos = range(len(sorted_filenames))
+        plt.bar(x_pos, sorted_actual_saved, alpha=0.7, color='green', edgecolor='black')
+        
+        # Add value labels on bars
+        for i, (x, y) in enumerate(zip(x_pos, sorted_actual_saved)):
+            plt.text(x, y + 0.01, f'{y:.2f}MB', ha='center', va='bottom', fontweight='bold', fontsize=8)
+        
+        plt.xlabel('Files (sorted by size)', fontsize=14)
+        plt.ylabel('Actual Saved Storage (MB)', fontsize=14)
+        plt.title(f'Actual Saved Storage by File - {file_ext.upper()} Files (Sorted by Size)', fontsize=16, fontweight='bold')
+        plt.xticks(x_pos, [f.split('.')[0] for f in sorted_filenames], rotation=45, ha='right')
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # Add statistics line
+        mean_saved = np.mean(sorted_actual_saved)
+        plt.axhline(y=mean_saved, color='red', linestyle='--', alpha=0.8, 
+                   label=f'Mean: {mean_saved:.2f}MB')
+        plt.legend()
+        
+        plt.tight_layout()
+        
+        saved_storage_graph_path = self.graphs_dir / f"actual_saved_storage_{safe_ext}_files.png"
+        plt.savefig(saved_storage_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Actual saved storage analysis for {file_ext} files saved to: {saved_storage_graph_path}")
+        plt.close()
+        
         # Create summary statistics for this file type
         self.create_file_type_statistics(file_ext, file_results)
+    
+    def create_general_saved_storage_graph(self, analysis_results: List[Dict]):
+        """Create a general graph showing actual saved storage for all files."""
+        
+        # Extract data
+        original_sizes = [r['original_size_mb'] for r in analysis_results]
+        actual_saved_storage = [r['total_storage_mb'] - r['original_size_mb'] for r in analysis_results]
+        filenames = [r['filename'] for r in analysis_results]
+        
+        # Sort files by original size for better visualization
+        sorted_indices = sorted(range(len(original_sizes)), key=lambda i: original_sizes[i])
+        sorted_filenames = [filenames[i] for i in sorted_indices]
+        sorted_actual_saved = [actual_saved_storage[i] for i in sorted_indices]
+        sorted_original_sizes = [original_sizes[i] for i in sorted_indices]
+        
+        # Create the graph
+        plt.figure(figsize=(16, 10))
+        
+        # Create bar chart of actual saved storage
+        x_pos = range(len(sorted_filenames))
+        bars = plt.bar(x_pos, sorted_actual_saved, alpha=0.7, color='green', edgecolor='black')
+        
+        # Add value labels on bars
+        for i, (x, y) in enumerate(zip(x_pos, sorted_actual_saved)):
+            plt.text(x, y + 0.01, f'{y:.2f}MB', ha='center', va='bottom', fontweight='bold', fontsize=8)
+        
+        # Color bars by file type
+        for i, filename in enumerate(sorted_filenames):
+            ext = Path(filename).suffix.lower()
+            if ext in ['.jpg', '.jpeg']:
+                bars[i].set_color('blue')
+            elif ext == '.png':
+                bars[i].set_color('red')
+            elif ext == '.bmp':
+                bars[i].set_color('orange')
+            else:
+                bars[i].set_color('green')
+        
+        plt.xlabel('Files (sorted by size)', fontsize=14)
+        plt.ylabel('Actual Saved Storage (MB)', fontsize=14)
+        plt.title('Actual Saved Storage by File - All File Types (Sorted by Size)', fontsize=16, fontweight='bold')
+        plt.xticks(x_pos, [f.split('.')[0] for f in sorted_filenames], rotation=45, ha='right')
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # Add statistics line
+        mean_saved = np.mean(sorted_actual_saved)
+        plt.axhline(y=mean_saved, color='red', linestyle='--', alpha=0.8, 
+                   label=f'Mean: {mean_saved:.2f}MB')
+        
+        # Add legend for file types
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='blue', label='JPEG'),
+            Patch(facecolor='red', label='PNG'),
+            Patch(facecolor='orange', label='BMP'),
+            Patch(facecolor='green', label='Other')
+        ]
+        plt.legend(handles=legend_elements, loc='upper right')
+        
+        plt.tight_layout()
+        
+        saved_storage_graph_path = self.graphs_dir / "actual_saved_storage_all_files.png"
+        plt.savefig(saved_storage_graph_path, dpi=300, bbox_inches='tight')
+        print(f"General actual saved storage analysis saved to: {saved_storage_graph_path}")
+        plt.close()
+        
+        # Create scatter plot: Original Size vs Actual Saved Storage
+        plt.figure(figsize=(14, 8))
+        
+        # Color points by file type
+        colors = []
+        for filename in filenames:
+            ext = Path(filename).suffix.lower()
+            if ext in ['.jpg', '.jpeg']:
+                colors.append('blue')
+            elif ext == '.png':
+                colors.append('red')
+            elif ext == '.bmp':
+                colors.append('orange')
+            else:
+                colors.append('green')
+        
+        plt.scatter(original_sizes, actual_saved_storage, alpha=0.7, s=80, c=colors, edgecolors='black')
+        
+        # Add trend line
+        if len(original_sizes) > 1:
+            z = np.polyfit(original_sizes, actual_saved_storage, 1)
+            p = np.poly1d(z)
+            plt.plot(original_sizes, p(original_sizes), "purple", alpha=0.8, linewidth=2,
+                    label=f'Trend: y = {z[0]:.4f}x + {z[1]:.4f}')
+        
+        plt.xlabel('Original File Size (MB)', fontsize=14)
+        plt.ylabel('Actual Saved Storage (MB)', fontsize=14)
+        plt.title('Actual Saved Storage vs Original File Size - All File Types', fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        
+        # Add legend
+        legend_elements = [
+            Patch(facecolor='blue', label='JPEG'),
+            Patch(facecolor='red', label='PNG'),
+            Patch(facecolor='orange', label='BMP'),
+            Patch(facecolor='green', label='Other')
+        ]
+        plt.legend(handles=legend_elements)
+        
+        plt.tight_layout()
+        
+        scatter_graph_path = self.graphs_dir / "saved_storage_vs_size_scatter.png"
+        plt.savefig(scatter_graph_path, dpi=300, bbox_inches='tight')
+        print(f"Saved storage vs size scatter plot saved to: {scatter_graph_path}")
+        plt.close()
     
     def create_file_type_statistics(self, file_ext: str, file_results: List[Dict]):
         """Create summary statistics for a specific file type."""
