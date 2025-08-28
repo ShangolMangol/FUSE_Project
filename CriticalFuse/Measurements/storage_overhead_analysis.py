@@ -169,6 +169,32 @@ class StorageOverheadAnalyzer:
         
         return related_files
     
+    def detect_jpeg_type(self, file_path: Path) -> str:
+        """
+        Detect if a JPEG file is progressive or baseline.
+        
+        Args:
+            file_path: Path to JPEG file
+            
+        Returns:
+            'progressive', 'baseline', or 'unknown'
+        """
+        try:
+            with open(file_path, 'rb') as f:
+                data = f.read(1024)  # Read first 1KB to check for progressive markers
+                
+                # Look for progressive JPEG markers (0xFFC2)
+                if b'\xFF\xC2' in data:
+                    return 'progressive'
+                # Look for baseline JPEG markers (0xFFC0, 0xFFC1)
+                elif b'\xFF\xC0' in data or b'\xFF\xC1' in data:
+                    return 'baseline'
+                else:
+                    return 'unknown'
+        except Exception as e:
+            print(f"Error detecting JPEG type for {file_path.name}: {e}")
+            return 'unknown'
+
     def calculate_storage_overhead(self, source_file: Path) -> Dict:
         """
         Calculate storage overhead for a single file.
@@ -183,6 +209,12 @@ class StorageOverheadAnalyzer:
         
         # Get original file size
         original_size = source_file.stat().st_size
+        
+        # Detect JPEG type if it's a JPEG file
+        jpeg_type = 'unknown'
+        if source_file.suffix.lower() in ['.jpg', '.jpeg']:
+            jpeg_type = self.detect_jpeg_type(source_file)
+            print(f"  JPEG type detected: {jpeg_type}")
         
         # Write file to mounted folder
         if not self.write_file_to_mount(source_file):
@@ -222,7 +254,8 @@ class StorageOverheadAnalyzer:
             'overhead_mb': overhead_bytes / (1024 * 1024),
             'overhead_percentage': overhead_percentage,
             'related_files': file_breakdown,
-            'file_count': len(related_files)
+            'file_count': len(related_files),
+            'jpeg_type': jpeg_type
         }
         
         print(f"  Original size: {result['original_size_mb']:.2f} MB")
@@ -392,6 +425,12 @@ class StorageOverheadAnalyzer:
         
         # Create general actual saved storage graph for all files
         self.create_general_saved_storage_graph(analysis_results)
+        
+        # Create JPEG type comparison graphs
+        self.create_jpeg_type_comparison_graphs(analysis_results)
+        
+        # Create storage percentage breakdown chart
+        self.create_storage_percentage_chart(analysis_results)
         
         # Summary Statistics Table
         self.create_summary_statistics(analysis_results)
@@ -725,6 +764,377 @@ class StorageOverheadAnalyzer:
         print(f"Saved storage vs size scatter plot saved to: {scatter_graph_path}")
         plt.close()
     
+    def create_jpeg_type_comparison_graphs(self, analysis_results: List[Dict]):
+        """Create comparison graphs between baseline and progressive JPEGs."""
+        
+        # Filter only JPEG files
+        jpeg_results = [r for r in analysis_results if r['jpeg_type'] in ['baseline', 'progressive']]
+        
+        if len(jpeg_results) < 2:
+            print("Not enough JPEG files with detected types for comparison")
+            return
+        
+        # Separate baseline and progressive JPEGs
+        baseline_results = [r for r in jpeg_results if r['jpeg_type'] == 'baseline']
+        progressive_results = [r for r in jpeg_results if r['jpeg_type'] == 'progressive']
+        
+        print(f"Creating JPEG type comparison: {len(baseline_results)} baseline, {len(progressive_results)} progressive")
+        
+        # Create comprehensive comparison figure
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('JPEG Type Comparison: Baseline vs Progressive', fontsize=16, fontweight='bold')
+        
+        # Extract data for both types
+        baseline_sizes = [r['original_size_mb'] for r in baseline_results]
+        baseline_overhead = [r['overhead_percentage'] for r in baseline_results]
+        baseline_efficiency = [r['original_size_mb'] / r['total_storage_mb'] * 100 for r in baseline_results]
+        
+        progressive_sizes = [r['original_size_mb'] for r in progressive_results]
+        progressive_overhead = [r['overhead_percentage'] for r in progressive_results]
+        progressive_efficiency = [r['original_size_mb'] / r['total_storage_mb'] * 100 for r in progressive_results]
+        
+        # Plot 1: Overhead Percentage Comparison
+        ax1.scatter(baseline_sizes, baseline_overhead, alpha=0.7, s=80, color='blue', 
+                   label=f'Baseline JPEG (n={len(baseline_results)})', edgecolors='black')
+        ax1.scatter(progressive_sizes, progressive_overhead, alpha=0.7, s=80, color='red', 
+                   label=f'Progressive JPEG (n={len(progressive_results)})', edgecolors='black')
+        
+        # Add trend lines
+        if len(baseline_sizes) > 1:
+            z_baseline = np.polyfit(baseline_sizes, baseline_overhead, 1)
+            p_baseline = np.poly1d(z_baseline)
+            ax1.plot(baseline_sizes, p_baseline(baseline_sizes), "b--", alpha=0.8, linewidth=2)
+        
+        if len(progressive_sizes) > 1:
+            z_progressive = np.polyfit(progressive_sizes, progressive_overhead, 1)
+            p_progressive = np.poly1d(z_progressive)
+            ax1.plot(progressive_sizes, p_progressive(progressive_sizes), "r--", alpha=0.8, linewidth=2)
+        
+        ax1.set_xlabel('Original File Size (MB)', fontsize=12)
+        ax1.set_ylabel('Storage Overhead (%)', fontsize=12)
+        ax1.set_title('Storage Overhead: Baseline vs Progressive JPEGs', fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Plot 2: Storage Efficiency Comparison
+        ax2.scatter(baseline_sizes, baseline_efficiency, alpha=0.7, s=80, color='blue', 
+                   label=f'Baseline JPEG (n={len(baseline_results)})', edgecolors='black')
+        ax2.scatter(progressive_sizes, progressive_efficiency, alpha=0.7, s=80, color='red', 
+                   label=f'Progressive JPEG (n={len(progressive_results)})', edgecolors='black')
+        
+        # Add trend lines
+        if len(baseline_sizes) > 1:
+            z_baseline = np.polyfit(baseline_sizes, baseline_efficiency, 1)
+            p_baseline = np.poly1d(z_baseline)
+            ax2.plot(baseline_sizes, p_baseline(baseline_sizes), "b--", alpha=0.8, linewidth=2)
+        
+        if len(progressive_sizes) > 1:
+            z_progressive = np.polyfit(progressive_sizes, progressive_efficiency, 1)
+            p_progressive = np.poly1d(z_progressive)
+            ax2.plot(progressive_sizes, p_progressive(progressive_sizes), "r--", alpha=0.8, linewidth=2)
+        
+        # Add 100% efficiency line
+        ax2.axhline(y=100, color='green', linestyle='--', alpha=0.5, label='100% Efficiency')
+        
+        ax2.set_xlabel('Original File Size (MB)', fontsize=12)
+        ax2.set_ylabel('Storage Efficiency (%)', fontsize=12)
+        ax2.set_title('Storage Efficiency: Baseline vs Progressive JPEGs', fontsize=14, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Plot 3: Box plot comparison of overhead percentages
+        overhead_data = [baseline_overhead, progressive_overhead]
+        box_plot = ax3.boxplot(overhead_data, labels=['Baseline JPEG', 'Progressive JPEG'], 
+                              patch_artist=True, showmeans=True)
+        
+        # Color the boxes
+        box_plot['boxes'][0].set_facecolor('lightblue')
+        box_plot['boxes'][1].set_facecolor('lightcoral')
+        
+        ax3.set_ylabel('Storage Overhead (%)', fontsize=12)
+        ax3.set_title('Overhead Distribution: Baseline vs Progressive', fontsize=14, fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+        
+        # Add statistics
+        baseline_mean = np.mean(baseline_overhead) if baseline_overhead else 0
+        progressive_mean = np.mean(progressive_overhead) if progressive_overhead else 0
+        ax3.text(1, baseline_mean, f'Mean: {baseline_mean:.1f}%', ha='center', va='bottom', fontweight='bold')
+        ax3.text(2, progressive_mean, f'Mean: {progressive_mean:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        # Plot 4: Box plot comparison of storage efficiency
+        efficiency_data = [baseline_efficiency, progressive_efficiency]
+        box_plot = ax4.boxplot(efficiency_data, labels=['Baseline JPEG', 'Progressive JPEG'], 
+                              patch_artist=True, showmeans=True)
+        
+        # Color the boxes
+        box_plot['boxes'][0].set_facecolor('lightblue')
+        box_plot['boxes'][1].set_facecolor('lightcoral')
+        
+        ax4.set_ylabel('Storage Efficiency (%)', fontsize=12)
+        ax4.set_title('Efficiency Distribution: Baseline vs Progressive', fontsize=14, fontweight='bold')
+        ax4.grid(True, alpha=0.3)
+        
+        # Add statistics
+        baseline_eff_mean = np.mean(baseline_efficiency) if baseline_efficiency else 0
+        progressive_eff_mean = np.mean(progressive_efficiency) if progressive_efficiency else 0
+        ax4.text(1, baseline_eff_mean, f'Mean: {baseline_eff_mean:.1f}%', ha='center', va='bottom', fontweight='bold')
+        ax4.text(2, progressive_eff_mean, f'Mean: {progressive_eff_mean:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        # Add 100% efficiency line
+        ax4.axhline(y=100, color='green', linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        
+        # Save the comparison graph
+        comparison_graph_path = self.graphs_dir / "jpeg_type_comparison.png"
+        plt.savefig(comparison_graph_path, dpi=300, bbox_inches='tight')
+        print(f"JPEG type comparison graph saved to: {comparison_graph_path}")
+        plt.close()
+        
+        # Create detailed statistics comparison
+        self.create_jpeg_type_statistics(baseline_results, progressive_results)
+    
+    def create_jpeg_type_statistics(self, baseline_results: List[Dict], progressive_results: List[Dict]):
+        """Create detailed statistics comparison between JPEG types."""
+        
+        # Calculate statistics for baseline JPEGs
+        baseline_overhead = [r['overhead_percentage'] for r in baseline_results]
+        baseline_efficiency = [r['original_size_mb'] / r['total_storage_mb'] * 100 for r in baseline_results]
+        baseline_sizes = [r['original_size_mb'] for r in baseline_results]
+        
+        # Calculate statistics for progressive JPEGs
+        progressive_overhead = [r['overhead_percentage'] for r in progressive_results]
+        progressive_efficiency = [r['original_size_mb'] / r['total_storage_mb'] * 100 for r in progressive_results]
+        progressive_sizes = [r['original_size_mb'] for r in progressive_results]
+        
+        # Create comparison statistics
+        stats = {
+            'Baseline JPEG Statistics': {
+                'Count': len(baseline_results),
+                'Average File Size (MB)': np.mean(baseline_sizes) if baseline_sizes else 0,
+                'Average Overhead (%)': np.mean(baseline_overhead) if baseline_overhead else 0,
+                'Median Overhead (%)': np.median(baseline_overhead) if baseline_overhead else 0,
+                'Average Efficiency (%)': np.mean(baseline_efficiency) if baseline_efficiency else 0,
+                'Median Efficiency (%)': np.median(baseline_efficiency) if baseline_efficiency else 0,
+                'Min Overhead (%)': np.min(baseline_overhead) if baseline_overhead else 0,
+                'Max Overhead (%)': np.max(baseline_overhead) if baseline_overhead else 0,
+                'Std Dev Overhead (%)': np.std(baseline_overhead) if baseline_overhead else 0
+            },
+            'Progressive JPEG Statistics': {
+                'Count': len(progressive_results),
+                'Average File Size (MB)': np.mean(progressive_sizes) if progressive_sizes else 0,
+                'Average Overhead (%)': np.mean(progressive_overhead) if progressive_overhead else 0,
+                'Median Overhead (%)': np.median(progressive_overhead) if progressive_overhead else 0,
+                'Average Efficiency (%)': np.mean(progressive_efficiency) if progressive_efficiency else 0,
+                'Median Efficiency (%)': np.median(progressive_efficiency) if progressive_efficiency else 0,
+                'Min Overhead (%)': np.min(progressive_overhead) if progressive_overhead else 0,
+                'Max Overhead (%)': np.max(progressive_overhead) if progressive_overhead else 0,
+                'Std Dev Overhead (%)': np.std(progressive_overhead) if progressive_overhead else 0
+            }
+        }
+        
+        # Save statistics to file
+        stats_file = self.graphs_dir / "jpeg_type_comparison_statistics.txt"
+        with open(stats_file, 'w') as f:
+            f.write("JPEG Type Comparison Statistics\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for category, data in stats.items():
+                f.write(f"{category}\n")
+                f.write("-" * len(category) + "\n")
+                for key, value in data.items():
+                    if isinstance(value, float):
+                        f.write(f"{key}: {value:.2f}\n")
+                    else:
+                        f.write(f"{key}: {value}\n")
+                f.write("\n")
+            
+            # Add comparison summary
+            if baseline_overhead and progressive_overhead:
+                f.write("Comparison Summary\n")
+                f.write("-" * 18 + "\n")
+                f.write(f"Overhead Difference: {np.mean(progressive_overhead) - np.mean(baseline_overhead):.2f}%\n")
+                f.write(f"Efficiency Difference: {np.mean(progressive_efficiency) - np.mean(baseline_efficiency):.2f}%\n")
+                if np.mean(progressive_overhead) < np.mean(baseline_overhead):
+                    f.write("Progressive JPEGs have LOWER overhead on average\n")
+                else:
+                    f.write("Baseline JPEGs have LOWER overhead on average\n")
+        
+        print(f"JPEG type comparison statistics saved to: {stats_file}")
+        
+        # Also save as JSON
+        stats_json = self.graphs_dir / "jpeg_type_comparison_statistics.json"
+        with open(stats_json, 'w') as f:
+            json.dump(stats, f, indent=2)
+        
+        print(f"JPEG type comparison statistics (JSON) saved to: {stats_json}")
+    
+    def create_storage_percentage_chart(self, analysis_results: List[Dict]):
+        """Create a bar chart showing the percentage of each file's storage out of total storage."""
+        
+        if not analysis_results:
+            print("No data available for storage percentage chart")
+            return
+        
+        # Calculate total storage used
+        total_storage_mb = sum(r['total_storage_mb'] for r in analysis_results)
+        
+        if total_storage_mb == 0:
+            print("Total storage is zero, cannot create percentage chart")
+            return
+        
+        # Sort files by total storage size (largest first)
+        sorted_results = sorted(analysis_results, key=lambda x: x['total_storage_mb'], reverse=True)
+        
+        # Extract data for plotting
+        filenames = [r['filename'] for r in sorted_results]
+        storage_percentages = [(r['total_storage_mb'] / total_storage_mb) * 100 for r in sorted_results]
+        storage_mb = [r['total_storage_mb'] for r in sorted_results]
+        
+        # Create the chart
+        plt.figure(figsize=(16, 10))
+        
+        # Create bar chart
+        bars = plt.bar(range(len(filenames)), storage_percentages, alpha=0.7, edgecolor='black')
+        
+        # Color bars by file type
+        for i, filename in enumerate(filenames):
+            ext = Path(filename).suffix.lower()
+            if ext in ['.jpg', '.jpeg']:
+                bars[i].set_color('blue')
+            elif ext == '.png':
+                bars[i].set_color('red')
+            elif ext == '.bmp':
+                bars[i].set_color('orange')
+            else:
+                bars[i].set_color('green')
+        
+        # Add value labels on bars
+        for i, (x, y) in enumerate(zip(range(len(filenames)), storage_percentages)):
+            plt.text(x, y + 0.1, f'{y:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=8)
+            # Also show absolute size
+            plt.text(x, y/2, f'{storage_mb[i]:.2f}MB', ha='center', va='center', 
+                    fontweight='bold', fontsize=7, color='white')
+        
+        plt.xlabel('Files (sorted by storage size)', fontsize=14)
+        plt.ylabel('Storage Percentage (%)', fontsize=14)
+        plt.title(f'Storage Usage Breakdown - Each File as % of Total Storage ({total_storage_mb:.2f} MB)', 
+                 fontsize=16, fontweight='bold')
+        plt.xticks(range(len(filenames)), [f.split('.')[0] for f in filenames], rotation=45, ha='right')
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # Add legend for file types
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='blue', label='JPEG'),
+            Patch(facecolor='red', label='PNG'),
+            Patch(facecolor='orange', label='BMP'),
+            Patch(facecolor='green', label='Other')
+        ]
+        plt.legend(handles=legend_elements, loc='upper right')
+        
+        # Add cumulative percentage line
+        cumulative_percentages = []
+        cumulative = 0
+        for pct in storage_percentages:
+            cumulative += pct
+            cumulative_percentages.append(cumulative)
+        
+        # Create secondary y-axis for cumulative percentage
+        ax2 = plt.gca().twinx()
+        ax2.plot(range(len(filenames)), cumulative_percentages, 'r-', linewidth=2, marker='o', markersize=4)
+        ax2.set_ylabel('Cumulative Storage Percentage (%)', fontsize=14, color='red')
+        ax2.tick_params(axis='y', labelcolor='red')
+        ax2.grid(True, alpha=0.3)
+        
+        # Add horizontal line at 80% and 90% cumulative
+        ax2.axhline(y=80, color='orange', linestyle='--', alpha=0.7, label='80% Cumulative')
+        ax2.axhline(y=90, color='red', linestyle='--', alpha=0.7, label='90% Cumulative')
+        
+        plt.tight_layout()
+        
+        # Save the chart
+        percentage_chart_path = self.graphs_dir / "storage_percentage_breakdown.png"
+        plt.savefig(percentage_chart_path, dpi=300, bbox_inches='tight')
+        print(f"Storage percentage breakdown chart saved to: {percentage_chart_path}")
+        plt.close()
+        
+        # Create a summary table of top storage consumers
+        self.create_storage_summary_table(sorted_results, total_storage_mb)
+    
+    def create_storage_summary_table(self, sorted_results: List[Dict], total_storage_mb: float):
+        """Create a summary table of storage usage."""
+        
+        # Calculate statistics
+        total_files = len(sorted_results)
+        top_10_percent = max(1, total_files // 10)  # Top 10% of files
+        top_25_percent = max(1, total_files // 4)   # Top 25% of files
+        top_50_percent = max(1, total_files // 2)   # Top 50% of files
+        
+        # Calculate cumulative storage for different percentiles
+        top_10_storage = sum(r['total_storage_mb'] for r in sorted_results[:top_10_percent])
+        top_25_storage = sum(r['total_storage_mb'] for r in sorted_results[:top_25_percent])
+        top_50_storage = sum(r['total_storage_mb'] for r in sorted_results[:top_50_percent])
+        
+        # Create summary statistics
+        summary = {
+            'Total Files': total_files,
+            'Total Storage (MB)': total_storage_mb,
+            'Average File Size (MB)': total_storage_mb / total_files,
+            'Largest File (MB)': sorted_results[0]['total_storage_mb'] if sorted_results else 0,
+            'Smallest File (MB)': sorted_results[-1]['total_storage_mb'] if sorted_results else 0,
+            'Top 10% Files': {
+                'Count': top_10_percent,
+                'Storage (MB)': top_10_storage,
+                'Percentage of Total': (top_10_storage / total_storage_mb) * 100
+            },
+            'Top 25% Files': {
+                'Count': top_25_percent,
+                'Storage (MB)': top_25_storage,
+                'Percentage of Total': (top_25_storage / total_storage_mb) * 100
+            },
+            'Top 50% Files': {
+                'Count': top_50_percent,
+                'Storage (MB)': top_50_storage,
+                'Percentage of Total': (top_50_storage / total_storage_mb) * 100
+            }
+        }
+        
+        # Save summary to file
+        summary_file = self.graphs_dir / "storage_usage_summary.txt"
+        with open(summary_file, 'w') as f:
+            f.write("Storage Usage Summary\n")
+            f.write("=" * 30 + "\n\n")
+            
+            f.write("Overall Statistics:\n")
+            f.write(f"Total Files: {summary['Total Files']}\n")
+            f.write(f"Total Storage: {summary['Total Storage (MB)']:.2f} MB\n")
+            f.write(f"Average File Size: {summary['Average File Size (MB)']:.2f} MB\n")
+            f.write(f"Largest File: {summary['Largest File (MB)']:.2f} MB\n")
+            f.write(f"Smallest File: {summary['Smallest File (MB)']:.2f} MB\n\n")
+            
+            f.write("Storage Distribution:\n")
+            for percentile in ['Top 10% Files', 'Top 25% Files', 'Top 50% Files']:
+                data = summary[percentile]
+                f.write(f"{percentile}:\n")
+                f.write(f"  Count: {data['Count']} files\n")
+                f.write(f"  Storage: {data['Storage (MB)']:.2f} MB\n")
+                f.write(f"  Percentage: {data['Percentage of Total']:.1f}%\n\n")
+            
+            f.write("Top 10 Largest Files:\n")
+            for i, result in enumerate(sorted_results[:10], 1):
+                percentage = (result['total_storage_mb'] / total_storage_mb) * 100
+                f.write(f"{i:2d}. {result['filename']:<30} {result['total_storage_mb']:8.2f} MB ({percentage:5.1f}%)\n")
+        
+        print(f"Storage usage summary saved to: {summary_file}")
+        
+        # Also save as JSON
+        summary_json = self.graphs_dir / "storage_usage_summary.json"
+        with open(summary_json, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        print(f"Storage usage summary (JSON) saved to: {summary_json}")
+    
     def create_file_type_statistics(self, file_ext: str, file_results: List[Dict]):
         """Create summary statistics for a specific file type."""
         
@@ -782,6 +1192,12 @@ class StorageOverheadAnalyzer:
         original_sizes = [r['original_size_mb'] for r in analysis_results]
         total_storage = [r['total_storage_mb'] for r in analysis_results]
         
+        # Count JPEG types
+        jpeg_types = [r.get('jpeg_type', 'unknown') for r in analysis_results if r.get('jpeg_type')]
+        baseline_count = jpeg_types.count('baseline')
+        progressive_count = jpeg_types.count('progressive')
+        unknown_jpeg_count = jpeg_types.count('unknown')
+        
         stats = {
             'Total Files Analyzed': len(analysis_results),
             'Total Original Size (MB)': sum(original_sizes),
@@ -793,7 +1209,12 @@ class StorageOverheadAnalyzer:
             'Max Overhead (%)': np.max(overhead_percentages),
             'Std Dev Overhead (%)': np.std(overhead_percentages),
             'Average File Size (MB)': np.mean(original_sizes),
-            'Storage Efficiency (%)': (sum(original_sizes) / sum(total_storage)) * 100
+            'Storage Efficiency (%)': (sum(original_sizes) / sum(total_storage)) * 100,
+            'JPEG Type Breakdown': {
+                'Baseline JPEGs': baseline_count,
+                'Progressive JPEGs': progressive_count,
+                'Unknown JPEGs': unknown_jpeg_count
+            }
         }
         
         # Save statistics to file
@@ -803,7 +1224,14 @@ class StorageOverheadAnalyzer:
             f.write("=" * 60 + "\n\n")
             
             for key, value in stats.items():
-                if isinstance(value, float):
+                if isinstance(value, dict):
+                    f.write(f"{key}:\n")
+                    for sub_key, sub_value in value.items():
+                        if isinstance(sub_value, float):
+                            f.write(f"  {sub_key}: {sub_value:.2f}\n")
+                        else:
+                            f.write(f"  {sub_key}: {sub_value}\n")
+                elif isinstance(value, float):
                     f.write(f"{key}: {value:.2f}\n")
                 else:
                     f.write(f"{key}: {value}\n")
