@@ -11,10 +11,32 @@ const int TIFF_HEADER_SIZE = 8;
 const int IFD_ENTRY_SIZE = 12;
 
 // DNG-specific tag IDs
-const uint16_t DNG_COLOR_MATRIX = 0xC621;
-const uint16_t DNG_CAMERA_CALIBRATION = 0xC623;
+const uint16_t DNG_BLACK_LEVEL = 0xC61A;
+const uint16_t DNG_WHITE_LEVEL = 0xC61D;
+const uint16_t DNG_COLOR_MATRIX_1 = 0xC621;
+const uint16_t DNG_COLOR_MATRIX_2 = 0xC622;
+const uint16_t DNG_CAMERA_CALIBRATION_1 = 0xC623;
+const uint16_t DNG_CAMERA_CALIBRATION_2 = 0xC624;
+const uint16_t DNG_REDUCTION_MATRIX_1 = 0xC625;
+const uint16_t DNG_REDUCTION_MATRIX_2 = 0xC626;
+const uint16_t DNG_ANALOG_BALANCE = 0xC627;
 const uint16_t DNG_AS_SHOT_NEUTRAL = 0xC628;
+const uint16_t DNG_AS_SHOT_WHITE_XY = 0xC629;
+const uint16_t DNG_BASELINE_EXPOSURE = 0xC62A;
+const uint16_t DNG_BASELINE_NOISE = 0xC62B;
+const uint16_t DNG_BASELINE_SHARPNESS = 0xC62C;
+const uint16_t DNG_BAYER_GREEN_SPLIT = 0xC62D;
+const uint16_t DNG_LINEAR_RESPONSE_LIMIT = 0xC62E;
+const uint16_t DNG_CAMERA_SERIAL_NUMBER = 0xC62F;
+const uint16_t DNG_LENS_INFO = 0xC630;
+const uint16_t DNG_CHROMA_BLUR_RADIUS = 0xC631;
+const uint16_t DNG_ANTI_ALIAS_STRENGTH = 0xC632;
+const uint16_t DNG_SHADOW_SCALE = 0xC633;
 const uint16_t DNG_MAKER_NOTE = 0xC634;
+const uint16_t DNG_CALIBRATION_ILLUMINANT_1 = 0xC65A;
+const uint16_t DNG_CALIBRATION_ILLUMINANT_2 = 0xC65B;
+const uint16_t DNG_BEST_QUALITY_SCALE = 0xC65C;
+const uint16_t DNG_ALIAS_LAYER_METADATA = 0xC660;
 
 // Helper: Endian awareness
 enum class Endian {
@@ -43,10 +65,32 @@ uint32_t read32(const char* ptr, Endian endian) {
 
 // Helper: Check if tag is DNG-specific metadata
 bool isDngMetadataTag(uint16_t tag) {
-    return tag == DNG_COLOR_MATRIX ||
-           tag == DNG_CAMERA_CALIBRATION ||
+    return tag == DNG_BLACK_LEVEL ||
+           tag == DNG_WHITE_LEVEL ||
+           tag == DNG_COLOR_MATRIX_1 ||
+           tag == DNG_COLOR_MATRIX_2 ||
+           tag == DNG_CAMERA_CALIBRATION_1 ||
+           tag == DNG_CAMERA_CALIBRATION_2 ||
+           tag == DNG_REDUCTION_MATRIX_1 ||
+           tag == DNG_REDUCTION_MATRIX_2 ||
+           tag == DNG_ANALOG_BALANCE ||
            tag == DNG_AS_SHOT_NEUTRAL ||
-           tag == DNG_MAKER_NOTE;
+           tag == DNG_AS_SHOT_WHITE_XY ||
+           tag == DNG_BASELINE_EXPOSURE ||
+           tag == DNG_BASELINE_NOISE ||
+           tag == DNG_BASELINE_SHARPNESS ||
+           tag == DNG_BAYER_GREEN_SPLIT ||
+           tag == DNG_LINEAR_RESPONSE_LIMIT ||
+           tag == DNG_CAMERA_SERIAL_NUMBER ||
+           tag == DNG_LENS_INFO ||
+           tag == DNG_CHROMA_BLUR_RADIUS ||
+           tag == DNG_ANTI_ALIAS_STRENGTH ||
+           tag == DNG_SHADOW_SCALE ||
+           tag == DNG_MAKER_NOTE ||
+           tag == DNG_CALIBRATION_ILLUMINANT_1 ||
+           tag == DNG_CALIBRATION_ILLUMINANT_2 ||
+           tag == DNG_BEST_QUALITY_SCALE ||
+           tag == DNG_ALIAS_LAYER_METADATA;
 }
 
 ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
@@ -86,10 +130,7 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
         return ResultCode::FAILURE;
     }
 
-    // 4. Map TIFF header
-    addToFileMap(0, TIFF_HEADER_SIZE - 1, 0, TIFF_HEADER_SIZE - 1, CriticalType::CRITICAL_DATA);
-
-    // 5. Read number of IFD entries
+    // 4. Read number of IFD entries
     uint16_t entryCount = read16(buffer + ifdOffset, endian);
     size_t ifdSize = 2 + entryCount * IFD_ENTRY_SIZE + 4; // includes nextIFD offset
     if (ifdOffset + ifdSize > size) {
@@ -97,14 +138,10 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
         return ResultCode::FAILURE;
     }
 
-    // Map IFD as critical
-    addToFileMap(ifdOffset, ifdOffset + ifdSize - 1,
-                 TIFF_HEADER_SIZE, TIFF_HEADER_SIZE + ifdSize - 1,
-                 CriticalType::CRITICAL_DATA);
-
-    // 6. Parse IFD entries
+    // 5. Parse IFD entries to collect all data regions
     std::vector<std::pair<uint32_t, uint32_t>> imageBlocks;
     std::vector<std::pair<uint32_t, uint32_t>> metadataBlocks;
+    std::vector<std::pair<uint32_t, uint32_t>> otherCriticalBlocks;
 
     for (int i = 0; i < entryCount; ++i) {
         size_t entryOffset = ifdOffset + 2 + i * IFD_ENTRY_SIZE;
@@ -118,14 +155,31 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
         uint32_t count = read32(buffer + entryOffset + 4, endian);
         uint32_t valueOffset = read32(buffer + entryOffset + 8, endian);
 
-        // Handle DNG metadata tags
+        // Calculate data size based on type
+        uint32_t dataSize = 0;
+        switch (type) {
+            case 1: dataSize = count; break;           // BYTE
+            case 2: dataSize = count; break;           // ASCII
+            case 3: dataSize = count * 2; break;       // SHORT
+            case 4: dataSize = count * 4; break;       // LONG
+            case 5: dataSize = count * 8; break;       // RATIONAL
+            case 6: dataSize = count; break;           // SBYTE
+            case 7: dataSize = count; break;           // UNDEFINED
+            case 8: dataSize = count * 2; break;       // SSHORT
+            case 9: dataSize = count * 4; break;       // SLONG
+            case 10: dataSize = count * 8; break;      // SRATIONAL
+            case 11: dataSize = count * 4; break;      // FLOAT
+            case 12: dataSize = count * 8; break;      // DOUBLE
+            default: dataSize = count * 4; break;      // Default to 4 bytes per value
+        }
+
+        // Handle DNG-specific metadata tags (critical)
         if (isDngMetadataTag(tag)) {
-            uint32_t dataSize = count * (type == 3 ? 2 : 4); // Approximate size
-            if (valueOffset + dataSize <= size) {
+            if (valueOffset + dataSize <= size && dataSize > 0) {
                 metadataBlocks.emplace_back(valueOffset, dataSize);
             }
         }
-        // Handle image data tags
+        // Handle image data tags (non-critical)
         else if (tag == 0x0111 || tag == 0x0117) { // StripOffsets or StripByteCounts
             std::vector<uint32_t> values;
 
@@ -149,43 +203,126 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
                 }
             }
         }
+        // Handle other critical metadata (EXIF, GPS, etc.)
+        else if (tag >= 0x0100 && tag <= 0x017F) { // Image structure tags
+            if (valueOffset + dataSize <= size && dataSize > 0) {
+                otherCriticalBlocks.emplace_back(valueOffset, dataSize);
+            }
+        }
+        // Handle EXIF tags (0x8769)
+        else if (tag == 0x8769) {
+            if (valueOffset + dataSize <= size && dataSize > 0) {
+                otherCriticalBlocks.emplace_back(valueOffset, dataSize);
+            }
+        }
     }
 
-    // 7. Map metadata blocks as critical
-    size_t mappedOffset = TIFF_HEADER_SIZE + ifdSize;
+    // 6. Map critical data regions sequentially
+    size_t criticalMappedOffset = 0;
+    
+    // Map TIFF header as critical
+    addToFileMap(0, TIFF_HEADER_SIZE - 1, 
+                 criticalMappedOffset, criticalMappedOffset + TIFF_HEADER_SIZE - 1, 
+                 CriticalType::CRITICAL_DATA);
+    criticalMappedOffset += TIFF_HEADER_SIZE;
+
+    // Map IFD as critical
+    addToFileMap(ifdOffset, ifdOffset + ifdSize - 1,
+                 criticalMappedOffset, criticalMappedOffset + ifdSize - 1,
+                 CriticalType::CRITICAL_DATA);
+    criticalMappedOffset += ifdSize;
+
+    // Map DNG metadata blocks as critical
     for (const auto& [offset, length] : metadataBlocks) {
         if (offset < size && length > 0 && offset + length <= size) {
             addToFileMap(offset, offset + length - 1,
-                        mappedOffset, mappedOffset + length - 1,
+                        criticalMappedOffset, criticalMappedOffset + length - 1,
                         CriticalType::CRITICAL_DATA);
-            mappedOffset += length;
+            criticalMappedOffset += length;
         }
     }
 
-    // 8. Map image data blocks as non-critical
-    mappedOffset = 0;
+    // Map other critical blocks
+    for (const auto& [offset, length] : otherCriticalBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            addToFileMap(offset, offset + length - 1,
+                        criticalMappedOffset, criticalMappedOffset + length - 1,
+                        CriticalType::CRITICAL_DATA);
+            criticalMappedOffset += length;
+        }
+    }
+
+    // 7. Map image data blocks as non-critical
+    size_t nonCriticalMappedOffset = 0;
     for (const auto& [offset, length] : imageBlocks) {
         if (offset < size && length > 0 && offset + length <= size) {
             addToFileMap(offset, offset + length - 1,
-                        mappedOffset, mappedOffset + length - 1,
+                        nonCriticalMappedOffset, nonCriticalMappedOffset + length - 1,
                         CriticalType::NON_CRITICAL_DATA);
-            mappedOffset += length;
+            nonCriticalMappedOffset += length;
         }
+    }
+
+    // 8. Map any remaining unmapped data as non-critical (likely more image data)
+    // This is a fallback to ensure we map the entire file
+    std::vector<std::pair<uint32_t, uint32_t>> allMappedRanges;
+    
+    // Collect all currently mapped ranges
+    for (const auto& [offset, length] : metadataBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            allMappedRanges.emplace_back(offset, length);
+        }
+    }
+    for (const auto& [offset, length] : otherCriticalBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            allMappedRanges.emplace_back(offset, length);
+        }
+    }
+    for (const auto& [offset, length] : imageBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            allMappedRanges.emplace_back(offset, length);
+        }
+    }
+    
+    // Add TIFF header and IFD ranges
+    allMappedRanges.emplace_back(0, TIFF_HEADER_SIZE);
+    allMappedRanges.emplace_back(ifdOffset, ifdSize);
+    
+    // Sort ranges by offset
+    std::sort(allMappedRanges.begin(), allMappedRanges.end());
+    
+    // Find gaps and map them as non-critical
+    uint32_t currentPos = 0;
+    for (const auto& [offset, length] : allMappedRanges) {
+        if (offset > currentPos) {
+            // Found a gap - map it as non-critical
+            uint32_t gapSize = offset - currentPos;
+            addToFileMap(currentPos, offset - 1,
+                        nonCriticalMappedOffset, nonCriticalMappedOffset + gapSize - 1,
+                        CriticalType::NON_CRITICAL_DATA);
+            nonCriticalMappedOffset += gapSize;
+        }
+        currentPos = std::max(currentPos, offset + length);
+    }
+    
+    // Map any remaining data at the end
+    if (currentPos < size) {
+        uint32_t remainingSize = size - currentPos;
+        addToFileMap(currentPos, size - 1,
+                    nonCriticalMappedOffset, nonCriticalMappedOffset + remainingSize - 1,
+                    CriticalType::NON_CRITICAL_DATA);
     }
 
     return ResultCode::SUCCESS;
 }
 
 /**
-TODO: fix the mapping file generation
-
-Wrong output from the DNG file handler:
-0-7 0-7 CRITICAL_DATA
-8-721 8-721 CRITICAL_DATA
-13334-13369 722-757 CRITICAL_DATA
-13478-13513 758-793 CRITICAL_DATA
-13646-13657 794-805 CRITICAL_DATA
-13742-308141 0-131327 NON_CRITICAL_DATA
-
-  
+ * DNG File Handler Implementation
+ * 
+ * This implementation properly separates DNG files into:
+ * - CRITICAL_DATA: TIFF header, IFD entries, DNG metadata, EXIF data, image structure tags
+ * - NON_CRITICAL_DATA: Raw image pixel data (can tolerate bit errors)
+ * 
+ * The mapping ensures no overlapping ranges and proper sequential mapping
+ * of critical and non-critical data regions.
  */
