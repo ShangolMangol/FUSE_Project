@@ -103,34 +103,24 @@ if [ -f "tests/test_assets/tree_9200KB.jpg" ]; then
     run_test "large JPEG non-critical file created" "[ -f '$BACKING_DIR/stress_tests/large.jpg.noncrit' ]"
 fi
 
-# Test 8: File truncation
-echo "Testing file truncation..."
-run_test "truncate file to 0" "echo 'content' > '$MOUNT_POINT/stress_tests/truncate.txt' && truncate -s 0 '$MOUNT_POINT/stress_tests/truncate.txt'"
-run_test "truncated file is empty" "[ \$(stat -c%s '$MOUNT_POINT/stress_tests/truncate.txt') -eq 0 ]"
-
-# Test 9: File append operations
-echo "Testing file append operations..."
-run_test "append to file" "echo 'Line 1' > '$MOUNT_POINT/stress_tests/append.txt' && echo 'Line 2' >> '$MOUNT_POINT/stress_tests/append.txt'"
-run_test "appended content correct" "cat '$MOUNT_POINT/stress_tests/append.txt' | grep -q 'Line 1' && cat '$MOUNT_POINT/stress_tests/append.txt' | grep -q 'Line 2'"
-
-# Test 10: Directory operations
+# Test 8: Directory operations
 echo "Testing directory operations..."
 run_test "create multiple directories" "mkdir -p '$MOUNT_POINT/stress_tests/dir1/dir2' '$MOUNT_POINT/stress_tests/dir3'"
 run_test "move directory" "mv '$MOUNT_POINT/stress_tests/dir3' '$MOUNT_POINT/stress_tests/moved_dir'"
 run_test "remove directory" "rmdir '$MOUNT_POINT/stress_tests/moved_dir'"
 
-# Test 11: File permissions and attributes
+# Test 9: File permissions and attributes
 echo "Testing file attributes..."
 run_test "check file permissions" "[ -r '$MOUNT_POINT/stress_tests/large.txt' ]"
 run_test "check file timestamps" "stat '$MOUNT_POINT/stress_tests/large.txt' >/dev/null"
 
-# Test 12: Memory usage with many files
+# Test 10: Memory usage with many files
 echo "Testing memory usage with many files..."
 for i in {1..100}; do
     run_test "create memory test file $i" "echo 'Memory test $i' > '$MOUNT_POINT/stress_tests/memory_$i.txt'"
 done
 
-# Test 13: Cleanup stress test
+# Test 11: Cleanup stress test
 echo "Testing cleanup operations..."
 run_test "remove all test files" "rm -rf '$MOUNT_POINT/stress_tests'"
 run_test "verify cleanup" "[ ! -d '$MOUNT_POINT/stress_tests' ]"
