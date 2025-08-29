@@ -41,6 +41,11 @@ TOTAL_PASSED=0
 TOTAL_FAILED=0
 FAILED_SUITES=()
 
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
 # Function to run a test suite
 run_test_suite() {
     local suite_name="$1"
@@ -60,11 +65,11 @@ run_test_suite() {
     
     # Run the test suite and capture results
     if "$suite_script" "$MOUNT_POINT" "$BACKING_DIR"; then
-        echo "$suite_name: PASSED ✓"
+        echo -e "$suite_name: ${GREEN}PASSED ✓${NC}"
         echo ""
         return 0
     else
-        echo "$suite_name: FAILED ✗"
+        echo -e "$suite_name: ${RED}FAILED ✗${NC}"
         echo ""
         FAILED_SUITES+=("$suite_name")
         return 1
@@ -189,10 +194,10 @@ main() {
     fi
     
     if [ $TOTAL_FAILED -eq 0 ]; then
-        echo "🎉 ALL TESTS PASSED! CriticalFUSE is working correctly! 🎉"
+        echo -e "🎉 ${GREEN}ALL TESTS PASSED! CriticalFUSE is working correctly!${NC} 🎉"
         exit 0
     else
-        echo "❌ Some tests failed. Please check the output above for details."
+        echo -e "❌ ${RED}Some tests failed. Please check the output above for details.${NC}"
         exit 1
     fi
 }

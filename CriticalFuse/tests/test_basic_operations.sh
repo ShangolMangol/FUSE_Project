@@ -32,6 +32,11 @@ echo "================================================"
 TESTS_PASSED=0
 TESTS_FAILED=0
 
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
 # Function to run a test
 run_test() {
     local test_name="$1"
@@ -40,10 +45,10 @@ run_test() {
     echo -n "Testing $test_name... "
     
     if eval "$test_command" >/dev/null 2>&1; then
-        echo "PASS"
+        echo -e "${GREEN}PASS${NC}"
         ((TESTS_PASSED++))
     else
-        echo "FAIL"
+        echo -e "${RED}FAIL${NC}"
         echo "  Command: $test_command"
         echo "  Error: $(eval "$test_command" 2>&1 | head -1)"
         ((TESTS_FAILED++))
@@ -122,9 +127,9 @@ echo "  Failed: $TESTS_FAILED"
 echo "  Total:  $((TESTS_PASSED + TESTS_FAILED))"
 
 if [ $TESTS_FAILED -eq 0 ]; then
-    echo "All tests passed! ✓"
+    echo -e "All tests passed! ${GREEN}✓${NC}"
     exit 0
 else
-    echo "Some tests failed! ✗"
+    echo -e "Some tests failed! ${RED}✗${NC}"
     exit 1
 fi
