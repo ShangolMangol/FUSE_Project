@@ -661,23 +661,29 @@ static int criticalfs_rename(const char *from, const char *to, unsigned int flag
         read_buffers.erase(fromReadIt);
         std::cout << "Moved read buffer from " << from << " to " << to << std::endl;
     }
+    auto handler = getFileHandler(from);
 
-    // Handle critical file components
-    std::string fromMapping = std::string(from_path) + ".mapping";
-    std::string fromCrit = std::string(from_path) + ".crit";
-    std::string fromNoncrit = std::string(from_path) + ".noncrit";
-    std::string toMapping = std::string(to_path) + ".mapping";
-    std::string toCrit = std::string(to_path) + ".crit";
-    std::string toNoncrit = std::string(to_path) + ".noncrit";
+    // If the file is a critical file, rename the critical file components
+    if (handler) {
+        // Handle critical file components
+        std::string fromMapping = std::string(from_path) + ".mapping";
+        std::string fromCrit = std::string(from_path) + ".crit";
+        std::string fromNoncrit = std::string(from_path) + ".noncrit";
+        std::string toMapping = std::string(to_path) + ".mapping";
+        std::string toCrit = std::string(to_path) + ".crit";
+        std::string toNoncrit = std::string(to_path) + ".noncrit";
 
-    rename(fromMapping.c_str(), toMapping.c_str());
-    rename(fromCrit.c_str(), toCrit.c_str());
-    rename(fromNoncrit.c_str(), toNoncrit.c_str());
-
-    // Rename the main file
-    int res = rename(from_path, to_path);
-    if (res == -1) {
-        return -errno;
+        rename(fromMapping.c_str(), toMapping.c_str());
+        rename(fromCrit.c_str(), toCrit.c_str());
+        rename(fromNoncrit.c_str(), toNoncrit.c_str());
+    }
+    // Rename the main file if its not a critical file
+    else {
+        int res = rename(from_path, to_path);
+        if (res == -1) {
+            return -errno;
+        }
+        return 0;
     }
     return 0;
 }
