@@ -217,106 +217,89 @@ ResultCode DngFileHandler::createMapping(const char* buffer, size_t size) {
         }
     }
 
-    // 6. Create mapping with proper separation of critical vs non-critical data
-    // Critical: Only essential file structure (header, IFD, key metadata)
-    // Non-critical: Raw image data and most metadata
-    
-    size_t criticalMappedOffset = 0;
-    size_t nonCriticalMappedOffset = 0;
-    
-    // Map TIFF header as critical (essential for file structure)
-    addToFileMap(0, TIFF_HEADER_SIZE - 1, 
-                 criticalMappedOffset, criticalMappedOffset + TIFF_HEADER_SIZE - 1, 
-                 CriticalType::CRITICAL_DATA);
-    criticalMappedOffset += TIFF_HEADER_SIZE;
-
-    // Map IFD as critical (essential for file structure)
-    addToFileMap(ifdOffset, ifdOffset + ifdSize - 1,
-                 criticalMappedOffset, criticalMappedOffset + ifdSize - 1,
-                 CriticalType::CRITICAL_DATA);
-    criticalMappedOffset += ifdSize;
-
-    // Map only essential DNG metadata as critical (color calibration, etc.)
-    for (const auto& [offset, length] : metadataBlocks) {
-        if (offset < size && length > 0 && offset + length <= size) {
-            addToFileMap(offset, offset + length - 1,
-                        criticalMappedOffset, criticalMappedOffset + length - 1,
-                        CriticalType::CRITICAL_DATA);
-            criticalMappedOffset += length;
-        }
-    }
-
-    // Map other metadata as critical (EXIF, GPS, etc. - all metadata is critical)
-    for (const auto& [offset, length] : otherCriticalBlocks) {
-        if (offset < size && length > 0 && offset + length <= size) {
-            addToFileMap(offset, offset + length - 1,
-                        criticalMappedOffset, criticalMappedOffset + length - 1,
-                        CriticalType::CRITICAL_DATA);
-            criticalMappedOffset += length;
-        }
-    }
-
-    // Map image data blocks as non-critical (ONLY raw pixel data goes here)
-    for (const auto& [offset, length] : imageBlocks) {
-        if (offset < size && length > 0 && offset + length <= size) {
-            addToFileMap(offset, offset + length - 1,
-                        nonCriticalMappedOffset, nonCriticalMappedOffset + length - 1,
-                        CriticalType::NON_CRITICAL_DATA);
-            nonCriticalMappedOffset += length;
-        }
-    }
-
-    // Map any remaining unmapped data
-    // We need to be careful: gaps between metadata should be critical, 
-    // only actual image data regions should be non-critical
-    std::vector<std::pair<uint32_t, uint32_t>> allMappedRanges;
-    
-    // Collect all currently mapped ranges
-    for (const auto& [offset, length] : metadataBlocks) {
-        if (offset < size && length > 0 && offset + length <= size) {
-            allMappedRanges.emplace_back(offset, length);
-        }
-    }
-    for (const auto& [offset, length] : otherCriticalBlocks) {
-        if (offset < size && length > 0 && offset + length <= size) {
-            allMappedRanges.emplace_back(offset, length);
-        }
-    }
-    for (const auto& [offset, length] : imageBlocks) {
-        if (offset < size && length > 0 && offset + length <= size) {
-            allMappedRanges.emplace_back(offset, length);
-        }
-    }
+    // 6. Create mapping with proper separation and NO OVERLAPS
+    // First, collect all ranges and sort them by original offset
+    std::vector<std::pair<uint32_t, uint32_t>> allOriginalRanges;
     
     // Add TIFF header and IFD ranges
-    allMappedRanges.emplace_back(0, TIFF_HEADER_SIZE);
-    allMappedRanges.emplace_back(ifdOffset, ifdSize);
+    allOriginalRanges.emplace_back(0, TIFF_HEADER_SIZE);
+    allOriginalRanges.emplace_back(ifdOffset, ifdSize);
     
-    // Sort ranges by offset
-    std::sort(allMappedRanges.begin(), allMappedRanges.end());
+    // Add metadata blocks
+    for (const auto& [offset, length] : metadataBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            allOriginalRanges.emplace_back(offset, length);
+        }
+    }
     
-    // Find gaps and determine if they should be critical or non-critical
+    // Add other critical blocks
+    for (const auto& [offset, length] : otherCriticalBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            allOriginalRanges.emplace_back(offset, length);
+        }
+    }
+    
+    // Add image blocks
+    for (const auto& [offset, length] : imageBlocks) {
+        if (offset < size && length > 0 && offset + length <= size) {
+            allOriginalRanges.emplace_back(offset, length);
+        }
+    }
+    
+    // Sort all ranges by original offset
+    std::sort(allOriginalRanges.begin(), allOriginalRanges.end());
+    
+    // Now map everything sequentially with no overlaps
+    size_t criticalMappedOffset = 0;
+    size_t nonCriticalMappedOffset = 0;
     uint32_t currentPos = 0;
-    for (const auto& [offset, length] : allMappedRanges) {
+    
+    for (const auto& [offset, length] : allOriginalRanges) {
+        // Handle any gap before this range
         if (offset > currentPos) {
-            // Found a gap - determine if it's likely metadata or image data
             uint32_t gapSize = offset - currentPos;
             
-            // If the gap is small (< 1KB), it's likely metadata padding - make it critical
-            // If the gap is large, it's likely image data - make it non-critical
+            // Determine if gap is critical or non-critical based on size
             if (gapSize < 1024) {
+                // Small gap - likely metadata padding - make it critical
                 addToFileMap(currentPos, offset - 1,
                             criticalMappedOffset, criticalMappedOffset + gapSize - 1,
                             CriticalType::CRITICAL_DATA);
                 criticalMappedOffset += gapSize;
             } else {
+                // Large gap - likely image data - make it non-critical
                 addToFileMap(currentPos, offset - 1,
                             nonCriticalMappedOffset, nonCriticalMappedOffset + gapSize - 1,
                             CriticalType::NON_CRITICAL_DATA);
                 nonCriticalMappedOffset += gapSize;
             }
         }
-        currentPos = std::max(currentPos, offset + length);
+        
+        // Map the current range
+        // Determine if this range is critical or non-critical
+        bool isImageData = false;
+        for (const auto& [imgOffset, imgLength] : imageBlocks) {
+            if (offset == imgOffset && length == imgLength) {
+                isImageData = true;
+                break;
+            }
+        }
+        
+        if (isImageData) {
+            // This is image data - map as non-critical
+            addToFileMap(offset, offset + length - 1,
+                        nonCriticalMappedOffset, nonCriticalMappedOffset + length - 1,
+                        CriticalType::NON_CRITICAL_DATA);
+            nonCriticalMappedOffset += length;
+        } else {
+            // This is metadata/structure - map as critical
+            addToFileMap(offset, offset + length - 1,
+                        criticalMappedOffset, criticalMappedOffset + length - 1,
+                        CriticalType::CRITICAL_DATA);
+            criticalMappedOffset += length;
+        }
+        
+        currentPos = offset + length;
     }
     
     // Map any remaining data at the end as non-critical (likely image data)
