@@ -40,6 +40,7 @@ TOTAL_TESTS=0
 TOTAL_PASSED=0
 TOTAL_FAILED=0
 FAILED_SUITES=()
+PASSED_SUITES=()
 
 # Color codes
 RED='\033[0;31m'
@@ -67,6 +68,7 @@ run_test_suite() {
     if "$suite_script" "$MOUNT_POINT" "$BACKING_DIR"; then
         echo -e "$suite_name: ${GREEN}PASSED ✓${NC}"
         echo ""
+        PASSED_SUITES+=("$suite_name")
         return 0
     else
         echo -e "$suite_name: ${RED}FAILED ✗${NC}"
@@ -179,16 +181,26 @@ main() {
     echo "===================================="
     echo "FINAL TEST RESULTS"
     echo "===================================="
-    echo "Test Suites:"
+    echo "Test Suites Summary:"
     echo "  Passed: $TOTAL_PASSED"
     echo "  Failed: $TOTAL_FAILED"
     echo "  Total:  $TOTAL_TESTS"
     echo ""
     
+    # Show passed test suites
+    if [ ${#PASSED_SUITES[@]} -gt 0 ]; then
+        echo -e "${GREEN}✓ PASSED Test Suites:${NC}"
+        for suite in "${PASSED_SUITES[@]}"; do
+            echo -e "  ${GREEN}✓${NC} $suite"
+        done
+        echo ""
+    fi
+    
+    # Show failed test suites
     if [ ${#FAILED_SUITES[@]} -gt 0 ]; then
-        echo "Failed Test Suites:"
+        echo -e "${RED}✗ FAILED Test Suites:${NC}"
         for suite in "${FAILED_SUITES[@]}"; do
-            echo "  - $suite"
+            echo -e "  ${RED}✗${NC} $suite"
         done
         echo ""
     fi

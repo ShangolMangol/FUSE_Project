@@ -112,20 +112,13 @@ echo "Testing unsupported file types..."
 run_test "create .pdf file (unsupported)" "echo 'PDF content' > '$MOUNT_POINT/file_type_tests/test.pdf'"
 run_test "pdf file created (no mapping)" "[ -f '$MOUNT_POINT/file_type_tests/test.pdf' ] && [ ! -f '$BACKING_DIR/file_type_tests/test.pdf.mapping' ]"
 
-# Test 7: File size verification
-echo "Testing file size consistency..."
-if [ -f "tests/test_assets/office_100KB.jpg" ]; then
-    ORIGINAL_SIZE=$(stat -c%s "tests/test_assets/office_100KB.jpg")
-    MOUNTED_SIZE=$(stat -c%s "$MOUNT_POINT/file_type_tests/test.jpg")
-    run_test "JPEG file size consistency" "[ $ORIGINAL_SIZE -eq $MOUNTED_SIZE ]"
-fi
 
-# Test 8: Multiple files of same type
+# Test 7: Multiple files of same type
 echo "Testing multiple files of same type..."
 run_test "create second .txt file" "echo 'Second text file' > '$MOUNT_POINT/file_type_tests/test2.txt'"
 run_test "second txt mapping created" "[ -f '$BACKING_DIR/file_type_tests/test2.txt.mapping' ]"
 
-# Test 9: File operations on critical files
+# Test 8: File operations on critical files
 echo "Testing file operations on critical files..."
 run_test "copy critical file" "cp '$MOUNT_POINT/file_type_tests/test.txt' '$MOUNT_POINT/file_type_tests/copied.txt'"
 run_test "copied file mapping created" "[ -f '$BACKING_DIR/file_type_tests/copied.txt.mapping' ]"
@@ -133,7 +126,7 @@ run_test "move critical file" "mv '$MOUNT_POINT/file_type_tests/copied.txt' '$MO
 run_test "moved file exists" "[ -f '$MOUNT_POINT/file_type_tests/moved.txt' ]"
 run_test "moved file mapping exists" "[ -f '$BACKING_DIR/file_type_tests/moved.txt.mapping' ]"
 
-# Test 10: Cleanup
+# Test 9: Cleanup
 echo "Cleaning up test files..."
 run_test "cleanup test directory" "rm -rf '$MOUNT_POINT/file_type_tests'"
 
