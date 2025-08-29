@@ -86,8 +86,6 @@ run_fuse: $(FUSE_TARGET)
 test: $(FUSE_TARGET)
 	@echo "Running CriticalFUSE tests..."
 	@chmod +x tests/*.sh
-	@echo "Setting up test assets..."
-	@./tests/setup_test_assets.sh
 	@if [ -d "mnt" ] && [ -d "storage" ]; then \
 		./tests/run_all_tests.sh ./mnt ./storage; \
 	else \
@@ -99,22 +97,14 @@ test: $(FUSE_TARGET)
 
 test_basic: $(FUSE_TARGET)
 	@chmod +x tests/*.sh
-	@./tests/setup_test_assets.sh
 	@./tests/test_basic_operations.sh ./mnt ./storage
 
 test_file_types: $(FUSE_TARGET)
 	@chmod +x tests/*.sh
-	@./tests/setup_test_assets.sh
 	@./tests/test_file_types.sh ./mnt ./storage
 
 test_stress: $(FUSE_TARGET)
 	@chmod +x tests/*.sh
-	@./tests/setup_test_assets.sh
 	@./tests/test_stress.sh ./mnt ./storage
 
-# Setup test assets
-setup_test_assets:
-	@chmod +x tests/*.sh
-	@./tests/setup_test_assets.sh
-
-.PHONY: all clean run run_fuse test test_basic test_file_types test_stress setup_test_assets
+.PHONY: all clean run run_fuse test test_basic test_file_types test_stress

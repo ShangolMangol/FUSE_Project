@@ -75,15 +75,24 @@ run_test_suite() {
 check_fuse_mount() {
     echo "Checking FUSE filesystem status..."
     
-    if ! mount | grep -q "fuse.*$MOUNT_POINT"; then
-        echo "Warning: No FUSE filesystem detected at $MOUNT_POINT"
+    # Check if mount point exists and is accessible
+    if [ ! -d "$MOUNT_POINT" ]; then
+        echo "Error: Mount point '$MOUNT_POINT' does not exist"
         echo "Make sure CriticalFUSE is mounted before running tests"
-        echo ""
-    else
-        echo "FUSE filesystem detected at $MOUNT_POINT ✓"
-        echo ""
+        exit 1
     fi
+    
+    # Try to list the directory to see if it's accessible
+    if ! ls "$MOUNT_POINT" >/dev/null 2>&1; then
+        echo "Error: Cannot access mount point '$MOUNT_POINT'"
+        echo "Make sure CriticalFUSE is mounted and accessible"
+        exit 1
+    fi
+    
+    echo "Mount point accessible at $MOUNT_POINT ✓"
+    echo ""
 }
+
 
 # Function to check test prerequisites
 check_prerequisites() {

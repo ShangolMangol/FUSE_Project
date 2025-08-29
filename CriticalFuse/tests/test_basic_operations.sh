@@ -44,6 +44,8 @@ run_test() {
         ((TESTS_PASSED++))
     else
         echo "FAIL"
+        echo "  Command: $test_command"
+        echo "  Error: $(eval "$test_command" 2>&1 | head -1)"
         ((TESTS_FAILED++))
     fi
 }
