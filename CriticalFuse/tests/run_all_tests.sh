@@ -4,7 +4,7 @@
 # Runs all test suites and provides comprehensive results
 # Usage: ./run_all_tests.sh /path/to/mnt /path/to/backing/dir
 
-set -e  # Exit on any error
+# Don't exit on error - we want to run all test suites and report results
 
 MOUNT_POINT="$1"
 BACKING_DIR="$2"
