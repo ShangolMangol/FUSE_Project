@@ -38,24 +38,20 @@ COMMON_SRCS = \
 # Target-specific sources
 HANDLER_SRCS = TextFileSplitTest.cpp $(COMMON_SRCS) $(GUETZLI_SRCS)
 FUSE_SRCS = FUSE/CriticalFUSE.cpp $(COMMON_SRCS) $(GUETZLI_SRCS)
-TEST_SRCS = test_exact_jpeg_parsing.cpp $(COMMON_SRCS) $(GUETZLI_SRCS)
 
 # Object files
 HANDLER_OBJS = $(HANDLER_SRCS:.cpp=.o)
 HANDLER_OBJS := $(HANDLER_OBJS:.cc=.o)
 FUSE_OBJS = $(FUSE_SRCS:.cpp=.o)
 FUSE_OBJS := $(FUSE_OBJS:.cc=.o)
-TEST_OBJS = $(TEST_SRCS:.cpp=.o)
-TEST_OBJS := $(TEST_OBJS:.cc=.o)
 
 # Executables
 TARGET = HandlerTest
 FUSE_TARGET = CriticalFUSE
 BITFLIPPER_TARGET = BitFlipper
-TEST_TARGET = test_exact_jpeg_parsing
 
 # Default target
-all: $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET) $(TEST_TARGET)
+all: $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET)
 
 # Linking
 $(TARGET): $(HANDLER_OBJS)
@@ -63,9 +59,6 @@ $(TARGET): $(HANDLER_OBJS)
 
 $(FUSE_TARGET): $(FUSE_OBJS)
 	$(CXX) $(FUSE_OBJS) -o $@ $(LDFLAGS)
-
-$(TEST_TARGET): $(TEST_OBJS)
-	$(CXX) $(TEST_OBJS) -o $@ $(LDFLAGS)
 
 $(BITFLIPPER_TARGET): BitFlipper.c
 	$(CC) -o $@ $< -lm
@@ -80,7 +73,7 @@ $(BITFLIPPER_TARGET): BitFlipper.c
 
 # Clean
 clean:
-	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET) $(TEST_OBJS) $(TEST_TARGET)
+	rm -f $(HANDLER_OBJS) $(FUSE_OBJS) $(TARGET) $(FUSE_TARGET) $(BITFLIPPER_TARGET)
 
 # Run
 run: $(TARGET)
@@ -89,4 +82,39 @@ run: $(TARGET)
 run_fuse: $(FUSE_TARGET)
 	./$(FUSE_TARGET) -f mnt
 
-.PHONY: all clean run run_fuse
+# Test targets
+test: $(FUSE_TARGET)
+	@echo "Running CriticalFUSE tests..."
+	@chmod +x tests/*.sh
+	@echo "Setting up test assets..."
+	@./tests/setup_test_assets.sh
+	@if [ -d "mnt" ] && [ -d "storage" ]; then \
+		./tests/run_all_tests.sh ./mnt ./storage; \
+	else \
+		echo "Error: Mount point 'mnt' or backing directory 'storage' not found."; \
+		echo "Please mount CriticalFUSE first: make run_fuse (in another terminal)"; \
+		echo "Then run: make test"; \
+		exit 1; \
+	fi
+
+test_basic: $(FUSE_TARGET)
+	@chmod +x tests/*.sh
+	@./tests/setup_test_assets.sh
+	@./tests/test_basic_operations.sh ./mnt ./storage
+
+test_file_types: $(FUSE_TARGET)
+	@chmod +x tests/*.sh
+	@./tests/setup_test_assets.sh
+	@./tests/test_file_types.sh ./mnt ./storage
+
+test_stress: $(FUSE_TARGET)
+	@chmod +x tests/*.sh
+	@./tests/setup_test_assets.sh
+	@./tests/test_stress.sh ./mnt ./storage
+
+# Setup test assets
+setup_test_assets:
+	@chmod +x tests/*.sh
+	@./tests/setup_test_assets.sh
+
+.PHONY: all clean run run_fuse test test_basic test_file_types test_stress setup_test_assets
