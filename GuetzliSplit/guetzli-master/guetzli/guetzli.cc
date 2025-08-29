@@ -35,9 +35,6 @@
 namespace {
 
 constexpr int kDefaultJPEGQuality = 95;
-constexpr int kBytesPerPixel = 350;
-constexpr int kLowestMemusageMB = 100; // in MB
-constexpr int kDefaultMemlimitMB = 6000; // in MB
 
 inline uint8_t BlendOnBlack(const uint8_t val, const uint8_t alpha) {
   return (static_cast<int>(val) * static_cast<int>(alpha) + 128) / 255;
@@ -185,13 +182,11 @@ void Usage() {
       "Flags:\n"
       "  --verbose      - Print a verbose trace of all attempts.\n"
       "  --quality Q    - Visual quality to aim for (JPEG quality value). Default: %d\n"
-      "  --memlimit M   - Memory limit in MB. Default: %d\n"
-      "  --nomemlimit   - Do not limit memory usage.\n"
       "  --split        - Output a .jpg.crit and .jpg.noncrit file instead of a JPEG.\n"
       "                   The output_filename is used as a base name.\n"
       "  --merge        - Input is a .jpg.crit file, merges with corresponding\n"
       "                   .jpg.noncrit file to produce a JPEG.\n",
-      kDefaultJPEGQuality, kDefaultMemlimitMB);
+      kDefaultJPEGQuality);
   exit(1);
 }
 
@@ -202,7 +197,6 @@ int main(int argc, char** argv) {
 
   int verbose = 0;
   int quality = kDefaultJPEGQuality;
-  int memlimit_mb = kDefaultMemlimitMB;
   bool split_mode = false;
   bool merge_mode = false;
 
@@ -214,11 +208,6 @@ int main(int argc, char** argv) {
     } else if (!strcmp(argv[opt_idx], "--quality")) {
       if (++opt_idx >= argc) Usage();
       quality = atoi(argv[opt_idx]);
-    } else if (!strcmp(argv[opt_idx], "--memlimit")) {
-      if (++opt_idx >= argc) Usage();
-      memlimit_mb = atoi(argv[opt_idx]);
-    } else if (!strcmp(argv[opt_idx], "--nomemlimit")) {
-      memlimit_mb = -1;
     } else if (!strcmp(argv[opt_idx], "--split")) {
       split_mode = true;
     } else if (!strcmp(argv[opt_idx], "--merge")) {
@@ -261,12 +250,10 @@ int main(int argc, char** argv) {
       }
     }
     split_opts.merge_crit_path = base_path + ".jpg.crit";
-    split_opts.merge_noncrit_path = base_path + ".jpg.noncrit";
-    split_opts.merge_nbits_path = base_path + ".jpg.nbits.crit";
+    split_opts.merge_noncrit_path = base_path + ".jpg.ac.noncrit";
 
-    fprintf(stderr, "Merging %s, %s, and %s into %s\n",
+    fprintf(stderr, "Merging %s and %s into %s\n",
             split_opts.merge_crit_path.c_str(),
-            split_opts.merge_nbits_path.c_str(),
             split_opts.merge_noncrit_path.c_str(),
             out_filename);
 
@@ -291,8 +278,7 @@ int main(int argc, char** argv) {
         base_path = base_path.substr(0, jpeg_pos);
     }
     split_opts.crit_path = base_path + ".jpg.crit";
-    split_opts.noncrit_path = base_path + ".jpg.noncrit";
-    split_opts.nbits_path = base_path + ".jpg.nbits.crit";
+    split_opts.noncrit_path = base_path + ".jpg.ac.noncrit";
   }
 
   std::string in_data = ReadFileOrDie(in_filename);
@@ -301,7 +287,9 @@ int main(int argc, char** argv) {
   guetzli::Params params;
   params.butteraugli_target =
       static_cast<float>(guetzli::ButteraugliScoreForQuality(quality));
-  params.split_jpeg = split_mode;
+  // Note: params.split_jpeg is not used in the current implementation
+  // The split logic is controlled by the split_merge_opts parameter
+
 
   guetzli::ProcessStats stats;
   if (verbose) {
@@ -320,12 +308,8 @@ int main(int argc, char** argv) {
       return 1;
     }
     double pixels = static_cast<double>(xsize) * ysize;
-    if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
-                                memlimit_mb < kLowestMemusageMB)) {
-      fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
-      return 1;
-    }
-    if (!guetzli::Process(params, &stats, rgb, xsize, ysize, &out_data, &split_opts)) {
+    // Memory limit check removed - allowing unlimited memory usage
+    if (!guetzli::Process(params, &stats, rgb, xsize, ysize, &out_data, split_mode ? &split_opts : nullptr)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
@@ -336,24 +320,18 @@ int main(int argc, char** argv) {
       return 1;
     }
     double pixels = static_cast<double>(jpg_header.width) * jpg_header.height;
-    if (memlimit_mb != -1 && (pixels * kBytesPerPixel / (1 << 20) > memlimit_mb ||
-                                memlimit_mb < kLowestMemusageMB)) {
-      fprintf(stderr, "Memory limit would be exceeded. Failing.\n");
-      return 1;
-    }
-    if (!guetzli::Process(params, &stats, in_data, &out_data, &split_opts)) {
+    // Memory limit check removed - allowing unlimited memory usage
+    if (!guetzli::Process(params, &stats, in_data, &out_data, split_mode ? &split_opts : nullptr)) {
       fprintf(stderr, "Guetzli processing failed\n");
       return 1;
     }
   }
 
   if (split_mode) {
-    // The .noncrit and .nbits.crit files are written during Process. We just need to write the
-    // .crit file, which is returned in out_data.
+    // The .crit file is returned in out_data, and the .ac.noncrit file is written during Process.
     fprintf(stderr, "Writing %s\n", split_opts.crit_path.c_str());
     WriteFileOrDie(split_opts.crit_path.c_str(), out_data);
     fprintf(stderr, "Wrote %s\n", split_opts.noncrit_path.c_str());
-    fprintf(stderr, "Wrote %s\n", split_opts.nbits_path.c_str());
   } else {
     WriteFileOrDie(out_filename, out_data);
   }

@@ -16,6 +16,7 @@
 #include <map>
 #include <iostream>
 #include <fstream>
+#include <cstring>
 
 #include "../FileHandlers/AbstractFile.h"
 #include "../FileHandlers/TextFile.h"
@@ -27,6 +28,22 @@
 
 #define BACKING_DIR_REL "./storage"
 static char backing_dir_abs[PATH_MAX];
+
+// Buffer for handling large file writes
+struct FileWriteBuffer {
+    std::vector<char> data;
+    size_t total_size;
+};
+
+// Buffer for handling file reads (caches entire file on first read)
+struct FileReadBuffer {
+    std::vector<char> data;
+    size_t total_size;
+    bool loaded;
+};
+
+static std::map<std::string, FileWriteBuffer> write_buffers;
+static std::map<std::string, FileReadBuffer> read_buffers;
 
 // FUSE attribute flags
 #define FUSE_SET_ATTR_MODE  (1 << 0)
@@ -42,6 +59,23 @@ static void fullpath(char fpath[PATH_MAX], const char *path) {
         snprintf(fpath, PATH_MAX, "%s", backing_dir_abs);
     } else {
         snprintf(fpath, PATH_MAX, "%s%s", backing_dir_abs, path);
+    }
+}
+
+// Global FUSE context for notifications
+static struct fuse* fuse_context = nullptr;
+
+// Helper to force attribute cache invalidation
+static void invalidate_attributes(const char* path) {
+    if (fuse_context && path) {
+        // Use FUSE's notification mechanism to invalidate the cache
+        // This tells the kernel that the file attributes have changed
+        int result = fuse_invalidate_path(fuse_context, path);
+        if (result == 0) {
+            std::cout << "Invalidated FUSE cache for path: " << path << std::endl;
+        } else {
+            std::cerr << "Failed to invalidate FUSE cache for path: " << path << " (error: " << result << ")" << std::endl;
+        }
     }
 }
 
@@ -147,6 +181,14 @@ static int criticalfs_getattr(const char *path, struct stat *stbuf, struct fuse_
         }
         stbuf->st_size = totalSize;
 
+        // Set the timestamps to match the mapping file
+        struct stat mapping_stat;
+        if (stat(mappingPath.c_str(), &mapping_stat) == 0) {
+            stbuf->st_atime = mapping_stat.st_atime;  // Access time
+            stbuf->st_mtime = mapping_stat.st_mtime;  // Modification time
+            stbuf->st_ctime = mapping_stat.st_ctime;  // Change time
+        }
+
         return 0;
     }
 
@@ -218,7 +260,11 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-    std::cout << "Reading from file: " << fpath << std::endl;
+    std::cout << "Reading from file: " << fpath << " with size: " << size << " at offset: " << offset << std::endl;
+    
+    std::string fileKey = std::string(path);
+    auto& readBuffer = read_buffers[fileKey];
+    
     // Check if this is a critical file
     std::string mappingPath = std::string(fpath) + ".mapping";
     if (access(mappingPath.c_str(), F_OK) == 0) {
@@ -227,53 +273,190 @@ static int criticalfs_read(const char *path, char *buf, size_t size, off_t offse
             // Not a supported file type, treat as regular file
             return -ENOENT;
         }
-        if (handler->readFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {
+        
+        // If reading from offset 0, always read fresh from disk and invalidate any existing buffer
+        if (offset == 0) {
+            std::cout << "Reading from offset 0 - reading fresh from disk" << std::endl;
+            
+            // Invalidate any existing buffer
+            readBuffer.loaded = false;
+            readBuffer.data.clear();
+            
+            // Get file size first
+            struct stat st;
+            if (criticalfs_getattr(path, &st, NULL) != 0) {
+                return -errno;
+            }
+            readBuffer.total_size = st.st_size;
+            
+            // Resize buffer to accommodate entire file
+            readBuffer.data.resize(readBuffer.total_size);
+            
+            // Read entire file using the handler
+            if (handler->readFile(mappingPath.c_str(), readBuffer.data.data(), readBuffer.total_size, 0) != ResultCode::SUCCESS) {
+                std::cerr << "Failed to load file into read buffer" << std::endl;
+                return -errno;
+            }
+            
+            readBuffer.loaded = true;
+            std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+        } else {
+            // Reading from non-zero offset - check if we have a valid buffer
+            if (!readBuffer.loaded) {
+                std::cout << "No valid buffer for non-zero offset read - reading fresh from disk" << std::endl;
+                
+                // Get file size first
+                struct stat st;
+                if (criticalfs_getattr(path, &st, NULL) != 0) {
+                    return -errno;
+                }
+                readBuffer.total_size = st.st_size;
+                
+                // Resize buffer to accommodate entire file
+                readBuffer.data.resize(readBuffer.total_size);
+                
+                // Read entire file using the handler
+                if (handler->readFile(mappingPath.c_str(), readBuffer.data.data(), readBuffer.total_size, 0) != ResultCode::SUCCESS) {
+                    std::cerr << "Failed to load file into read buffer" << std::endl;
+                    return -errno;
+                }
+                
+                readBuffer.loaded = true;
+                std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+            } else {
+                std::cout << "Using existing buffer for non-zero offset read" << std::endl;
+            }
+        }
+        
+        // Read from buffer
+        size_t bytesToRead = std::min(size, readBuffer.total_size - offset);
+        if (bytesToRead > 0) {
+            memcpy(buf, readBuffer.data.data() + offset, bytesToRead);
+            std::cout << "Read " << bytesToRead << " bytes from buffer at offset " << offset << std::endl;
+            return bytesToRead;
+        }
+        
+        return 0; // End of file
+    }
+
+    // Not a critical file, handle with read buffer
+    if (offset == 0) {
+        // Reading from offset 0 - always read fresh from disk
+        std::cout << "Reading regular file from offset 0 - reading fresh from disk" << std::endl;
+        
+        // Invalidate any existing buffer
+        readBuffer.loaded = false;
+        readBuffer.data.clear();
+        
+        // Get file size
+        struct stat st;
+        if (criticalfs_getattr(path, &st, NULL) != 0) {
+            return -errno;
+        }
+        readBuffer.total_size = st.st_size;
+        
+        // Resize buffer to accommodate entire file
+        readBuffer.data.resize(readBuffer.total_size);
+        
+        // Read entire file
+        int fd = open(fpath, O_RDONLY);
+        if (fd == -1) {
             return -errno;
         }
         
-        return size;
+        ssize_t bytesRead = read(fd, readBuffer.data.data(), readBuffer.total_size);
+        close(fd);
+        
+        if (bytesRead == -1) {
+            return -errno;
+        }
+        
+        readBuffer.total_size = bytesRead;
+        readBuffer.loaded = true;
+        std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+    } else {
+        // Reading from non-zero offset - check if we have a valid buffer
+        if (!readBuffer.loaded) {
+            std::cout << "No valid buffer for non-zero offset read - reading fresh from disk" << std::endl;
+            
+            // Get file size
+            struct stat st;
+            if (criticalfs_getattr(path, &st, NULL) != 0) {
+                return -errno;
+            }
+            readBuffer.total_size = st.st_size;
+            
+            // Resize buffer to accommodate entire file
+            readBuffer.data.resize(readBuffer.total_size);
+            
+            // Read entire file
+            int fd = open(fpath, O_RDONLY);
+            if (fd == -1) {
+                return -errno;
+            }
+            
+            ssize_t bytesRead = read(fd, readBuffer.data.data(), readBuffer.total_size);
+            close(fd);
+            
+            if (bytesRead == -1) {
+                return -errno;
+            }
+            
+            readBuffer.total_size = bytesRead;
+            readBuffer.loaded = true;
+            std::cout << "Successfully loaded " << readBuffer.total_size << " bytes into read buffer from disk" << std::endl;
+        } else {
+            std::cout << "Using existing buffer for non-zero offset read" << std::endl;
+        }
     }
-
-    // Not a critical file, read directly
-    int fd = open(fpath, O_RDONLY);
-    if (fd == -1) {
-        return -errno;
+    
+    // Read from buffer
+    size_t bytesToRead = std::min(size, readBuffer.total_size - offset);
+    if (bytesToRead > 0) {
+        memcpy(buf, readBuffer.data.data() + offset, bytesToRead);
+        std::cout << "Read " << bytesToRead << " bytes from buffer at offset " << offset << std::endl;
+        return bytesToRead;
     }
-
-    int res = pread(fd, buf, size, offset);
-    close(fd);
-    if (res == -1) {
-        return -errno;
-    }
-    return res;
+    
+    return 0; // End of file
 }
 
 static int criticalfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
-    std::cout << "Writing to file: " << fpath << std::endl;
+    std::cout << "Writing to file: " << fpath << " with size: " << size << " at offset: " << offset << std::endl;
+    
+    std::string fileKey = std::string(path);
+    
+    // Invalidate read buffer when file is being written to
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        readIt->second.loaded = false;
+        readIt->second.data.clear();
+        std::cout << "Invalidated read buffer for file: " << path << std::endl;
+    }
+    
     // Check if this is a critical file
     std::string mappingPath = std::string(fpath) + ".mapping";
     if (access(mappingPath.c_str(), F_OK) == 0) {
-        auto handler = getFileHandler(path);
-        if (!handler) {
-            // Not a supported file type, treat as regular file
-            std::cerr << "Not a supported file type for critical write: " << path << std::endl;
-            std::cerr << "Mapping path: " << mappingPath << std::endl;
-            return -ENOENT;
+        auto& buffer = write_buffers[fileKey];
+        
+        // Ensure buffer is large enough
+        if (buffer.data.size() < offset + size) {
+            buffer.data.resize(offset + size);
         }
-        if (handler->writeFile(mappingPath.c_str(), buf, size, offset) != ResultCode::SUCCESS) {
-            return -errno;
-        }
-        std::cout << "Wrote " << size << " bytes to file: " << path << std::endl;
-        std::cout << "Offset: " << offset << std::endl;
-        std::cout << "Buffer: " << buf << std::endl;
-        std::cout << "Mapping path: " << mappingPath << std::endl;
-        std::cout << "File path: " << fpath << std::endl;
-
+        
+        // Copy data to buffer
+        memcpy(buffer.data.data() + offset, buf, size);
+        buffer.total_size = std::max(buffer.total_size, offset + size);
+        
+        // Just buffer the data - processing will happen in release() when file is closed
+        std::cout << "Buffered " << size << " bytes at offset " << offset << " (total buffered: " << buffer.total_size << ")" << std::endl;
+        
         return size;
     }
+    
     std::cout << "Not a critical file, writing directly" << std::endl;
     // Not a critical file, write directly
     int fd = open(fpath, O_WRONLY);
@@ -287,6 +470,85 @@ static int criticalfs_write(const char *path, const char *buf, size_t size, off_
         return -errno;
     }
     return res;
+}
+
+static int criticalfs_release(const char *path, struct fuse_file_info *fi) {
+    (void) fi;
+    char fpath[PATH_MAX];
+    fullpath(fpath, path);
+    
+    // Check if there's buffered data for this file that needs to be processed
+    std::string fileKey = std::string(path);
+    auto it = write_buffers.find(fileKey);
+    if (it != write_buffers.end()) {
+        std::string mappingPath = std::string(fpath) + ".mapping";
+        if (access(mappingPath.c_str(), F_OK) == 0) {
+            auto handler = getFileHandler(path);
+            if (handler && it->second.total_size > 0) {
+                std::cout << "File closed - processing complete buffered file: " << it->second.total_size << " bytes" << std::endl;
+                ResultCode result = handler->writeFile(mappingPath.c_str(), it->second.data.data(), it->second.total_size, 0);
+                if (result == ResultCode::SUCCESS) {
+                    std::cout << "Successfully processed complete file of size: " << it->second.total_size << " bytes" << std::endl;
+                    
+                    // Force FUSE cache invalidation to update file attributes immediately
+                    invalidate_attributes(path);
+                } else {
+                    std::cerr << "Failed to process file of size: " << it->second.total_size << " bytes" << std::endl;
+                }
+            }
+        }
+        // Use the key to erase instead of the iterator which may be invalid after invalidate_attributes
+        write_buffers.erase(fileKey);
+    }
+    
+    // Always invalidate read buffer after release to ensure fresh reads
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        readIt->second.loaded = false;
+        readIt->second.data.clear();
+        std::cout << "Invalidated read buffer after release for file: " << path << std::endl;
+    }
+    
+    return 0;
+}
+
+static int criticalfs_flush(const char *path, struct fuse_file_info *fi) {
+    (void) fi;
+    char fpath[PATH_MAX];
+    fullpath(fpath, path);
+    
+    // Check if there's buffered data that should be processed on flush
+    std::string fileKey = std::string(path);
+    auto it = write_buffers.find(fileKey);
+    if (it != write_buffers.end()) {
+        std::string mappingPath = std::string(fpath) + ".mapping";
+        if (access(mappingPath.c_str(), F_OK) == 0) {
+            auto handler = getFileHandler(path);
+            if (handler && it->second.total_size > 0) {
+                std::cout << "Flush called - processing buffered file: " << it->second.total_size << " bytes" << std::endl;
+                ResultCode result = handler->writeFile(mappingPath.c_str(), it->second.data.data(), it->second.total_size, 0);
+                if (result == ResultCode::SUCCESS) {
+                    std::cout << "Successfully processed file on flush: " << it->second.total_size << " bytes" << std::endl;
+                    
+                    // Force FUSE cache invalidation to update file attributes immediately
+                    invalidate_attributes(path);
+                    
+                    // Use the key to erase instead of the iterator which may be invalid after invalidate_attributes
+                    write_buffers.erase(fileKey);
+                }
+            }
+        }
+    }
+    
+    // Always invalidate read buffer after flush to ensure fresh reads
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        readIt->second.loaded = false;
+        readIt->second.data.clear();
+        std::cout << "Invalidated read buffer after flush for file: " << path << std::endl;
+    }
+    
+    return 0;
 }
 
 static int criticalfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
@@ -327,6 +589,15 @@ static int criticalfs_unlink(const char *path) {
     char fpath[PATH_MAX];
     fullpath(fpath, path);
     std::cout << "Unlinking file: " << fpath << std::endl;
+    
+    // Clear read buffer for this file
+    std::string fileKey = std::string(path);
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        read_buffers.erase(readIt);
+        std::cout << "Cleared read buffer for deleted file: " << path << std::endl;
+    }
+    
     // Check if this is a critical file
     auto handler = getFileHandler(path);
     if (handler) {
@@ -379,22 +650,40 @@ static int criticalfs_rename(const char *from, const char *to, unsigned int flag
     fullpath(from_path, from);
     fullpath(to_path, to);
 
-    // Handle critical file components
-    std::string fromMapping = std::string(from_path) + ".mapping";
-    std::string fromCrit = std::string(from_path) + ".crit";
-    std::string fromNoncrit = std::string(from_path) + ".noncrit";
-    std::string toMapping = std::string(to_path) + ".mapping";
-    std::string toCrit = std::string(to_path) + ".crit";
-    std::string toNoncrit = std::string(to_path) + ".noncrit";
+    // Handle read buffers for renamed files
+    std::string fromKey = std::string(from);
+    std::string toKey = std::string(to);
+    
+    auto fromReadIt = read_buffers.find(fromKey);
+    if (fromReadIt != read_buffers.end()) {
+        // Move read buffer from old path to new path
+        read_buffers[toKey] = std::move(fromReadIt->second);
+        read_buffers.erase(fromReadIt);
+        std::cout << "Moved read buffer from " << from << " to " << to << std::endl;
+    }
+    auto handler = getFileHandler(from);
 
-    rename(fromMapping.c_str(), toMapping.c_str());
-    rename(fromCrit.c_str(), toCrit.c_str());
-    rename(fromNoncrit.c_str(), toNoncrit.c_str());
+    // If the file is a critical file, rename the critical file components
+    if (handler) {
+        // Handle critical file components
+        std::string fromMapping = std::string(from_path) + ".mapping";
+        std::string fromCrit = std::string(from_path) + ".crit";
+        std::string fromNoncrit = std::string(from_path) + ".noncrit";
+        std::string toMapping = std::string(to_path) + ".mapping";
+        std::string toCrit = std::string(to_path) + ".crit";
+        std::string toNoncrit = std::string(to_path) + ".noncrit";
 
-    // Rename the main file
-    int res = rename(from_path, to_path);
-    if (res == -1) {
-        return -errno;
+        rename(fromMapping.c_str(), toMapping.c_str());
+        rename(fromCrit.c_str(), toCrit.c_str());
+        rename(fromNoncrit.c_str(), toNoncrit.c_str());
+    }
+    // Rename the main file if its not a critical file
+    else {
+        int res = rename(from_path, to_path);
+        if (res == -1) {
+            return -errno;
+        }
+        return 0;
     }
     return 0;
 }
@@ -403,6 +692,15 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
     (void) fi;
     char fpath[PATH_MAX];
     fullpath(fpath, path);
+
+    // Clear read buffer when file is truncated
+    std::string fileKey = std::string(path);
+    auto readIt = read_buffers.find(fileKey);
+    if (readIt != read_buffers.end()) {
+        readIt->second.loaded = false;
+        readIt->second.data.clear();
+        std::cout << "Invalidated read buffer for truncated file: " << path << std::endl;
+    }
 
     // Check if this is a critical file
     std::string mappingPath = std::string(fpath) + ".mapping";
@@ -462,6 +760,36 @@ static int criticalfs_truncate(const char *path, off_t size, struct fuse_file_in
 //     return 0;
 // }
 
+static void* criticalfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+    (void) conn;
+    (void) cfg;
+    
+    // Store the FUSE context for notifications
+    struct fuse_context* ctx = fuse_get_context();
+    if (ctx && ctx->fuse) {
+        fuse_context = ctx->fuse;
+        std::cout << "FUSE filesystem initialized with context" << std::endl;
+    } else {
+        std::cerr << "Warning: Failed to get FUSE context" << std::endl;
+        fuse_context = nullptr;
+    }
+    
+    return NULL;
+}
+
+static void criticalfs_destroy(void *private_data) {
+    (void) private_data;
+    
+    // Clear all buffers
+    write_buffers.clear();
+    read_buffers.clear();
+    
+    // Clear FUSE context
+    fuse_context = nullptr;
+    
+    std::cout << "FUSE filesystem destroyed" << std::endl;
+}
+
 static const struct fuse_operations criticalfs_oper = {
     .getattr     = criticalfs_getattr,
     // .readlink    = ...,
@@ -479,16 +807,16 @@ static const struct fuse_operations criticalfs_oper = {
     .read        = criticalfs_read,
     .write       = criticalfs_write,
     // .statfs      = ...,
-    // .flush       = ...,
-    // .release     = ...,
+    .flush       = criticalfs_flush,
+    .release     = criticalfs_release,
     // .fsync       = ...,
     // ... xattr functions ...
     // .opendir     = ...,
     .readdir     = criticalfs_readdir,
     // .releasedir  = ...,
     // .fsyncdir    = ...,
-    // .init        = ...,
-    // .destroy     = ...,
+    .init        = criticalfs_init,
+    .destroy     = criticalfs_destroy,
     // .access      = ...,
     .create      = criticalfs_create,
     // ... other fields ...
@@ -516,5 +844,9 @@ int main(int argc, char *argv[]) {
     }
 
     fprintf(stderr, "Using backing directory: %s\n", backing_dir_abs);
+    
+    // For now, use the original arguments without modification
+    // To enable larger file support, mount with: 
+    // ./CriticalFUSE -o max_write=20971520 -o max_read=20971520 -f -d ./mnt
     return fuse_main(argc, argv, &criticalfs_oper, NULL);
 } 
