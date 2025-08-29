@@ -3,7 +3,7 @@
 # Basic FUSE operations test script
 # Usage: ./test_basic_operations.sh /path/to/mnt /path/to/backing/dir
 
-set -e  # Exit on any error
+# Don't exit on error - we want to run all tests and report results
 
 MOUNT_POINT="$1"
 BACKING_DIR="$2"

@@ -4,7 +4,7 @@
 # Tests different file types (TXT, JPEG, PNG, BMP, DNG)
 # Usage: ./test_file_types.sh /path/to/mnt /path/to/backing/dir
 
-set -e  # Exit on any error
+# Don't exit on error - we want to run all tests and report results
 
 MOUNT_POINT="$1"
 BACKING_DIR="$2"
