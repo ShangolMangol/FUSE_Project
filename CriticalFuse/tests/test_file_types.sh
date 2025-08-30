@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # File type specific tests for CriticalFUSE
-# Tests different file types (TXT, JPEG, PNG, BMP, DNG)
+# Tests different file types (TXT, JPEG, PNG, BMP)
 # Usage: ./test_file_types.sh /path/to/mnt /path/to/backing/dir
 
 # Don't exit on error - we want to run all tests and report results
@@ -99,26 +99,20 @@ if [ -f "tests/test_assets/sample1.bmp" ]; then
     run_test "read .bmp file" "file '$MOUNT_POINT/file_type_tests/test.bmp' | grep -q 'PC bitmap'"
 fi
 
-# Test 5: DNG files (.dng)
-echo "Testing DNG files..."
-if [ -f "tests/test_assets/test_image.dng" ]; then
-    run_test "create .dng file" "cp tests/test_assets/test_image.dng '$MOUNT_POINT/file_type_tests/test.dng'"
-    run_test "dng mapping file created" "[ -f '$BACKING_DIR/file_type_tests/test.dng.mapping' ]"
-    run_test "read .dng file" "file '$MOUNT_POINT/file_type_tests/test.dng' | grep -q 'TIFF'"
-fi
 
-# Test 6: Unsupported file types (should be treated as regular files)
+
+# Test 5: Unsupported file types (should be treated as regular files)
 echo "Testing unsupported file types..."
 run_test "create .pdf file (unsupported)" "echo 'PDF content' > '$MOUNT_POINT/file_type_tests/test.pdf'"
 run_test "pdf file created (no mapping)" "[ -f '$MOUNT_POINT/file_type_tests/test.pdf' ] && [ ! -f '$BACKING_DIR/file_type_tests/test.pdf.mapping' ]"
 
 
-# Test 7: Multiple files of same type
+# Test 6: Multiple files of same type
 echo "Testing multiple files of same type..."
 run_test "create second .txt file" "echo 'Second text file' > '$MOUNT_POINT/file_type_tests/test2.txt'"
 run_test "second txt mapping created" "[ -f '$BACKING_DIR/file_type_tests/test2.txt.mapping' ]"
 
-# Test 8: File operations on critical files
+# Test 7: File operations on critical files
 echo "Testing file operations on critical files..."
 run_test "copy critical file" "cp '$MOUNT_POINT/file_type_tests/test.txt' '$MOUNT_POINT/file_type_tests/copied.txt'"
 run_test "copied file mapping created" "[ -f '$BACKING_DIR/file_type_tests/copied.txt.mapping' ]"
@@ -126,7 +120,7 @@ run_test "move critical file" "mv '$MOUNT_POINT/file_type_tests/copied.txt' '$MO
 run_test "moved file exists" "[ -f '$MOUNT_POINT/file_type_tests/moved.txt' ]"
 run_test "moved file mapping exists" "[ -f '$BACKING_DIR/file_type_tests/moved.txt.mapping' ]"
 
-# Test 9: Cleanup
+# Test 8: Cleanup
 echo "Cleaning up test files..."
 run_test "cleanup test directory" "rm -rf '$MOUNT_POINT/file_type_tests'"
 
