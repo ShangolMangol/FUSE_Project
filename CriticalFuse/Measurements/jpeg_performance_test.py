@@ -9,14 +9,16 @@ comparison graphs showing the performance differences.
 The script includes file display simulation during read operations to measure complete
 read time including display overhead, providing more realistic performance measurements.
 
-For accurate performance comparisons, the script automatically flushes files from the
-Linux system cache before reading them in regular filesystem tests. This ensures that the
-regular filesystem doesn't benefit from cached data, providing fair comparisons with
-the FUSE filesystem.
+For accurate performance comparisons, the script automatically performs aggressive cache
+flushing on the Linux system before reading files in regular filesystem tests. This ensures
+that the regular filesystem doesn't benefit from cached data, providing fair comparisons
+with the FUSE filesystem.
 
-Cache flushing is performed using Linux-specific methods:
+Aggressive cache flushing is enabled by default and uses multiple Linux-specific methods:
+- Multiple sync operations with delays
 - vmtouch: Preferred method for evicting files from cache
 - fincore + dd: Alternative method to check and drop files from cache
+- fadvise: Advise kernel to drop cache
 - /proc/sys/vm/drop_caches: System-wide cache drop (requires root)
 - File touch: Fallback method to invalidate cache
 
@@ -28,6 +30,7 @@ Examples:
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --output results.json
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-display
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-cache-flush
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-aggressive-cache-flush
 """
 
 import os
@@ -49,7 +52,7 @@ import numpy as np
 class CriticalFUSEPerformanceTester:
     def __init__(self, test_images_folder: str, regular_folder: str, mounted_folder: str, 
                  output_dir: str, output_file: str = None, simulate_display: bool = True, 
-                 enable_cache_flush: bool = True):
+                 enable_cache_flush: bool = True, aggressive_cache_flush: bool = True):
         """
         Initialize the performance tester.
         
@@ -61,6 +64,7 @@ class CriticalFUSEPerformanceTester:
             output_file: Optional path to save results JSON
             simulate_display: Whether to simulate file display operations during read
             enable_cache_flush: Whether to flush files from cache during regular filesystem tests
+            aggressive_cache_flush: Whether to use aggressive cache flushing (more thorough but slower)
         """
         self.test_images_folder = Path(test_images_folder)
         self.regular_folder = Path(regular_folder)
@@ -69,6 +73,7 @@ class CriticalFUSEPerformanceTester:
         self.output_file = output_file
         self.simulate_display = simulate_display
         self.enable_cache_flush = enable_cache_flush
+        self.aggressive_cache_flush = aggressive_cache_flush
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -94,7 +99,7 @@ class CriticalFUSEPerformanceTester:
     
     def flush_file_from_cache(self, file_path: Path) -> bool:
         """
-        Flush a specific file from the Linux system cache.
+        Aggressively flush a specific file from the Linux system cache.
         
         Args:
             file_path: Path to the file to flush from cache
@@ -108,45 +113,93 @@ class CriticalFUSEPerformanceTester:
                 print(f"    Warning: Cache flushing only supported on Linux")
                 return False
             
-            # Method 1: Use vmtouch to evict from cache (preferred)
+            print(f"    Aggressively flushing {file_path.name} from cache...")
+            
+            # Method 1: Multiple sync operations to ensure data is written
+            try:
+                for _ in range(3):  # Multiple syncs for thoroughness
+                    subprocess.run(['sync'], capture_output=True, timeout=5)
+                time.sleep(0.1)  # Small delay between operations
+            except:
+                pass
+            
+            # Method 2: Use vmtouch to evict from cache (preferred)
             try:
                 result = subprocess.run(['vmtouch', '-e', str(file_path)], 
-                                     capture_output=True, text=True, timeout=5)
+                                     capture_output=True, text=True, timeout=10)
                 if result.returncode == 0:
-                    return True
+                    print(f"    vmtouch eviction successful for {file_path.name}")
+                    time.sleep(0.1)
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 pass
             
-            # Method 2: Use fincore to check if file is in cache, then drop it
+            # Method 3: Use fincore to check if file is in cache, then drop it
             try:
                 # Check if file is in cache
                 result = subprocess.run(['fincore', str(file_path)], 
                                       capture_output=True, text=True, timeout=5)
                 if result.returncode == 0 and 'pages' in result.stdout:
+                    print(f"    File {file_path.name} found in cache, dropping...")
                     # Drop the file from cache using dd
                     subprocess.run(['dd', 'if=/dev/zero', f'of={file_path}', 'bs=1', 'count=0', 'conv=notrunc'], 
                                  capture_output=True, timeout=5)
-                    return True
+                    time.sleep(0.1)
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 pass
             
-            # Method 3: Use sync and drop_caches (requires root, but more thorough)
+            # Method 4: Use fadvise to advise kernel to drop cache
             try:
-                # Sync filesystem
-                subprocess.run(['sync'], capture_output=True, timeout=5)
+                # Use fadvise with FADV_DONTNEED to drop from cache
+                subprocess.run(['fadvise', '-d', str(file_path)], 
+                             capture_output=True, timeout=5)
+                time.sleep(0.1)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+            
+            # Method 5: Use sync and drop_caches (requires root, but most thorough)
+            try:
+                # Sync filesystem multiple times
+                for _ in range(3):
+                    subprocess.run(['sync'], capture_output=True, timeout=5)
+                
                 # Drop page cache (requires root or specific permissions)
                 with open('/proc/sys/vm/drop_caches', 'w') as f:
                     f.write('1')  # Drop page cache
+                print(f"    System-wide cache drop successful")
+                time.sleep(0.2)  # Wait for cache to be fully dropped
                 return True
             except (PermissionError, FileNotFoundError):
                 pass
             
-            # Method 4: Fallback - try to invalidate cache by touching the file
+            # Method 6: Force read the file to ensure it's not cached, then drop
             try:
-                file_path.touch()
-                return True
+                # Read the file to potentially cache it, then drop
+                with open(file_path, 'rb') as f:
+                    f.read(1024)  # Read first 1KB
+                
+                # Now try to drop it again
+                subprocess.run(['sync'], capture_output=True, timeout=5)
+                with open('/proc/sys/vm/drop_caches', 'w') as f:
+                    f.write('1')
+                time.sleep(0.1)
             except:
                 pass
+            
+            # Method 7: Fallback - try to invalidate cache by touching the file
+            try:
+                file_path.touch()
+                time.sleep(0.1)
+            except:
+                pass
+            
+            # Final sync to ensure everything is written
+            try:
+                subprocess.run(['sync'], capture_output=True, timeout=5)
+            except:
+                pass
+                
+            print(f"    Cache flushing completed for {file_path.name}")
+            return True
                 
         except Exception as e:
             print(f"    Warning: Could not flush cache for {file_path.name}: {e}")
@@ -155,7 +208,7 @@ class CriticalFUSEPerformanceTester:
     
     def flush_directory_from_cache(self, directory_path: Path) -> int:
         """
-        Flush all files in a directory from the Linux system cache.
+        Aggressively flush all files in a directory from the Linux system cache.
         
         Args:
             directory_path: Path to the directory to flush from cache
@@ -174,27 +227,123 @@ class CriticalFUSEPerformanceTester:
             if not directory_path.exists():
                 return 0
             
-            # Try system-wide cache drop first (most efficient for directories)
+            print(f"    Aggressively flushing directory cache: {directory_path}")
+            
+            # Method 1: Multiple aggressive sync operations
             try:
-                subprocess.run(['sync'], capture_output=True, timeout=5)
+                for _ in range(5):  # Multiple syncs for thoroughness
+                    subprocess.run(['sync'], capture_output=True, timeout=5)
+                time.sleep(0.2)  # Wait between operations
+            except:
+                pass
+            
+            # Method 2: Try system-wide cache drop (most efficient for directories)
+            try:
+                # Multiple syncs before dropping cache
+                for _ in range(3):
+                    subprocess.run(['sync'], capture_output=True, timeout=5)
+                
+                # Drop page cache (requires root or specific permissions)
                 with open('/proc/sys/vm/drop_caches', 'w') as f:
                     f.write('1')  # Drop page cache
                 print(f"    System-wide cache drop successful")
+                time.sleep(0.3)  # Wait for cache to be fully dropped
+                
+                # Additional cache drops for thoroughness
+                with open('/proc/sys/vm/drop_caches', 'w') as f:
+                    f.write('2')  # Drop dentries and inodes
+                time.sleep(0.1)
+                
+                with open('/proc/sys/vm/drop_caches', 'w') as f:
+                    f.write('3')  # Drop everything
+                time.sleep(0.2)
+                
                 return 1  # Return 1 to indicate success
             except (PermissionError, FileNotFoundError):
+                print(f"    System-wide cache drop failed, trying individual files...")
                 pass
             
-            # Fallback: flush individual files
-            files = [f for f in directory_path.iterdir() if f.is_file()]
+            # Method 3: Use vmtouch for directory-wide cache eviction
+            try:
+                result = subprocess.run(['vmtouch', '-e', str(directory_path)], 
+                                     capture_output=True, text=True, timeout=15)
+                if result.returncode == 0:
+                    print(f"    vmtouch directory eviction successful")
+                    time.sleep(0.2)
+                    return 1
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
             
-            for file_path in files:
+            # Method 4: Fallback: flush individual files aggressively
+            files = [f for f in directory_path.iterdir() if f.is_file()]
+            print(f"    Flushing {len(files)} individual files from cache...")
+            
+            for i, file_path in enumerate(files, 1):
+                print(f"    Flushing file {i}/{len(files)}: {file_path.name}")
                 if self.flush_file_from_cache(file_path):
                     flushed_count += 1
+                
+                # Additional sync every 5 files
+                if i % 5 == 0:
+                    try:
+                        subprocess.run(['sync'], capture_output=True, timeout=5)
+                        time.sleep(0.1)
+                    except:
+                        pass
+            
+            # Final aggressive sync and cache drop
+            try:
+                for _ in range(3):
+                    subprocess.run(['sync'], capture_output=True, timeout=5)
+                with open('/proc/sys/vm/drop_caches', 'w') as f:
+                    f.write('3')  # Drop everything
+                time.sleep(0.2)
+            except:
+                pass
                     
         except Exception as e:
             print(f"    Warning: Could not flush directory cache: {e}")
             
+        print(f"    Directory cache flushing completed: {flushed_count} files processed")
         return flushed_count
+    
+    def aggressive_system_cache_flush(self) -> bool:
+        """
+        Perform aggressive system-wide cache flushing.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if platform.system().lower() != "linux":
+                return False
+            
+            print("    Performing aggressive system-wide cache flush...")
+            
+            # Method 1: Multiple sync operations
+            for _ in range(5):
+                subprocess.run(['sync'], capture_output=True, timeout=5)
+            time.sleep(0.3)
+            
+            # Method 2: Drop all caches multiple times
+            for _ in range(3):
+                try:
+                    with open('/proc/sys/vm/drop_caches', 'w') as f:
+                        f.write('3')  # Drop everything
+                    time.sleep(0.2)
+                except (PermissionError, FileNotFoundError):
+                    pass
+            
+            # Method 3: Additional sync and cache drop
+            subprocess.run(['sync'], capture_output=True, timeout=5)
+            time.sleep(0.1)
+            
+            print("    Aggressive system-wide cache flush completed")
+            return True
+            
+        except Exception as e:
+            print(f"    Warning: Aggressive cache flush failed: {e}")
+            return False
     
     def find_jpeg_files(self) -> List[Path]:
         """Find all JPEG files in the test images folder."""
@@ -710,6 +859,8 @@ class CriticalFUSEPerformanceTester:
         print(f"Mounted folder: {self.mounted_folder}")
         print(f"Display simulation: {'Enabled' if self.simulate_display else 'Disabled'}")
         print(f"Cache flushing: {'Enabled' if self.enable_cache_flush else 'Disabled'}")
+        if self.enable_cache_flush:
+            print(f"Aggressive cache flushing: {'Enabled' if self.aggressive_cache_flush else 'Disabled'}")
         
         # Check if we're on Linux for cache flushing
         if self.enable_cache_flush and platform.system().lower() != "linux":
@@ -726,8 +877,19 @@ class CriticalFUSEPerformanceTester:
         # Test regular folder performance
         if self.enable_cache_flush:
             print("\n=== Flushing Regular Filesystem Cache ===")
+            
+            # Aggressive system-wide cache flush first
+            if self.aggressive_cache_flush:
+                self.aggressive_system_cache_flush()
+            
+            # Then flush the specific directory
             flushed_count = self.flush_directory_from_cache(self.regular_folder)
             print(f"Flushed {flushed_count} files from regular filesystem cache")
+            
+            # Additional aggressive flush if enabled
+            if self.aggressive_cache_flush:
+                print("    Performing additional aggressive cache flush...")
+                self.aggressive_system_cache_flush()
         else:
             print("\n=== Cache Flushing Disabled ===")
         
@@ -764,6 +926,7 @@ def main():
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
     parser.add_argument('--no-display', action='store_true', help='Skip file display simulation during read operations')
     parser.add_argument('--no-cache-flush', action='store_true', help='Skip flushing files from cache during regular filesystem tests')
+    parser.add_argument('--no-aggressive-cache-flush', action='store_true', help='Disable aggressive cache flushing (use standard cache flushing instead)')
     
     args = parser.parse_args()
     
@@ -779,9 +942,10 @@ def main():
     # Create tester and run tests
     simulate_display = not args.no_display
     enable_cache_flush = not args.no_cache_flush
+    aggressive_cache_flush = not args.no_aggressive_cache_flush
     tester = CriticalFUSEPerformanceTester(args.test_images_folder, args.regular_folder, 
                                           args.mounted_folder, args.output_dir, args.output, 
-                                          simulate_display, enable_cache_flush)
+                                          simulate_display, enable_cache_flush, aggressive_cache_flush)
     
     try:
         tester.run_tests()
