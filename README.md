@@ -1,12 +1,190 @@
 # FUSE Project
 
 ## Table of Contents
+- [Installation Guide](#installation-guide)
 - [Supported File Types](#supported-file-types)
 - [Compilation](#compilation)
 - [Running the FUSE Filesystem](#running-the-fuse-filesystem)
 - [Adding a New File Handler](#adding-a-new-file-handler)
 - [BitFlipper Tool](#bitflipper-tool)
 - [Project Structure](#project-structure)
+
+## Installation Guide
+
+### System Requirements
+
+#### Operating System
+- **Linux** (Ubuntu 24)
+
+
+#### Hardware Requirements
+- **RAM**: Minimum 2GB, Recommended 4GB+
+- **Storage**: At least 1GB free space for compilation and test files
+- **CPU**: Any modern x86_64 processor
+
+### Dependencies
+
+#### Core Dependencies
+The following packages are required for building and running CriticalFuse:
+
+**Ubuntu/Debian:**
+```bash
+sudo apt update
+sudo apt install -y \
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    pkg-config \
+    libfuse3-dev \
+    libjpeg-dev \
+    python3 \
+    python3-pip \
+    python3-dev
+```
+
+
+#### Python Dependencies
+For the measurement and analysis tools, install the required Python packages:
+
+```bash
+pip3 install --user \
+    matplotlib \
+    numpy \
+    pillow \
+    scikit-image
+```
+
+**Note**: If you encounter permission issues, use `pip3 install --user` or create a virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate 
+pip install matplotlib numpy pillow scikit-image
+```
+
+#### Optional Dependencies
+For enhanced functionality:
+
+**ImageMagick** (for advanced image processing in measurement tools):
+```bash
+# Ubuntu/Debian
+sudo apt install imagemagick
+
+```
+
+### Installation Steps
+
+#### Option A: Virtual Machine (Recommended for Quick Start)
+For users who want to get started immediately without dealing with dependencies:
+
+1. **Download the Pre-configured VM**
+   - Download the `.ova` file: https://1drv.ms/u/c/dfb6b8ce0b372201/EXOzfA1soL9CrSvp8E1DRpQB6kr54q1h09KaMK5Mung6Aw?e=pBu3ZX
+   - Import the VM using VirtualBox, VMware, or similar virtualization software
+   - The VM comes pre-installed with all dependencies and the CriticalFuse project
+
+2. **Start the VM**
+   - Boot the virtual machine
+   - Login with the provided credentials
+   - Navigate to the project directory: `cd "Fuse Project/CriticalFuse"`
+
+3. **Verify Installation**
+   ```bash
+   # Check if everything is already built
+   ls -la CriticalFUSE BitFlipper
+   
+   # If not built, build the project
+   make clean && make
+   ```
+
+#### Option B: Manual Installation
+
+##### 1. Clone the Repository
+```bash
+git clone <repository-url>
+cd "Fuse Project"
+```
+
+##### 2. Build the Project
+Navigate to the CriticalFuse directory and build:
+```bash
+cd CriticalFuse
+make clean  # Clean any previous builds
+make        # Build all components
+```
+
+##### 3. Verify Installation
+Test that all components built successfully:
+```bash
+# Check if executables were created
+ls -la CriticalFUSE BitFlipper
+
+# Run a quick test
+make test_basic
+```
+
+##### 4. Create Required Directories
+```bash
+# Create mount point and storage directory
+mkdir -p mnt storage
+
+# Set appropriate permissions
+chmod 755 mnt storage
+```
+
+### Troubleshooting Installation
+
+#### Common Issues
+
+**1. FUSE3 Development Libraries Not Found**
+```
+Error: Package 'fuse3' not found
+```
+**Solution**: Install libfuse3-dev (Ubuntu/Debian)
+
+**2. JPEG Library Not Found**
+```
+Error: jpeg.h: No such file or directory
+```
+**Solution**: Install libjpeg-dev (Ubuntu/Debian) or libjpeg-devel (CentOS/Fedora)
+
+**3. Python Dependencies Issues**
+```
+Error: No module named 'matplotlib'
+```
+**Solution**: Install Python dependencies with pip3 or use a virtual environment
+
+**4. Permission Denied on Mount**
+```
+Error: permission denied
+```
+**Solution**: 
+- Add your user to the `fuse` group: `sudo usermod -a -G fuse $USER`
+- Log out and log back in
+- Or run with `sudo` (not recommended for development)
+
+
+#### Verification Commands
+After installation, verify everything works:
+
+```bash
+# Test compilation
+make clean && make
+
+# Test FUSE mounting (in one terminal)
+./CriticalFUSE -f mnt
+
+# Test basic operations (in another terminal)
+echo "test" > mnt/test.txt
+cat mnt/test.txt
+fusermount3 -u mnt  # Unmount when done
+```
+
+### Next Steps
+After successful installation:
+1. Read the [Compilation](#compilation) section for build options
+2. Follow the [Running the FUSE Filesystem](#running-the-fuse-filesystem) guide
+3. Explore the [Testing](#testing) section to validate your installation
+4. Check out the [Performance Analysis](#performance-analysis) tools
 
 ## Supported File Types
 
@@ -35,7 +213,6 @@ make
 
 This will build:
 - CriticalFUSE (the main FUSE filesystem)
-- HandlerTest (for testing txt file split)
 - BitFlipper (for bit manipulation over non-critical data)
 
 ### Makefile Targets
@@ -43,13 +220,11 @@ The Makefile provides several targets:
 
 - `make` or `make all`: Builds all executables
 - `make clean`: Removes all compiled objects and executables
-- `make run`: Runs the HandlerTest executable
 - `make run_fuse`: Runs the CriticalFUSE filesystem in foreground mode
 
 To build specific components:
 ```bash
 make CriticalFUSE    # Build only the FUSE filesystem
-make HandlerTest     # Build only the handler test
 make BitFlipper      # Build only the bit flipper tool
 ```
 
