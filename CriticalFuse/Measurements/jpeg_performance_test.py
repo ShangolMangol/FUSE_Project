@@ -6,6 +6,11 @@ This script compares the performance of file operations between a mounted FUSE f
 and a regular folder. It measures read and write times for JPEG images and generates
 comparison graphs showing the performance differences.
 
+The script supports three test modes:
+- Both: Tests both read and write performance (default)
+- Read-only: Tests only read performance
+- Write-only: Tests only write performance
+
 The script includes file display simulation during read operations to measure complete
 read time including display overhead, providing more realistic performance measurements.
 
@@ -31,6 +36,8 @@ Examples:
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-display
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-cache-flush
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-aggressive-cache-flush
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --read-only
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --write-only
 """
 
 import os
@@ -52,7 +59,8 @@ import numpy as np
 class CriticalFUSEPerformanceTester:
     def __init__(self, test_images_folder: str, regular_folder: str, mounted_folder: str, 
                  output_dir: str, output_file: str = None, simulate_display: bool = True, 
-                 enable_cache_flush: bool = True, aggressive_cache_flush: bool = True):
+                 enable_cache_flush: bool = True, aggressive_cache_flush: bool = True,
+                 test_mode: str = "both"):
         """
         Initialize the performance tester.
         
@@ -65,6 +73,7 @@ class CriticalFUSEPerformanceTester:
             simulate_display: Whether to simulate file display operations during read
             enable_cache_flush: Whether to flush files from cache during regular filesystem tests
             aggressive_cache_flush: Whether to use aggressive cache flushing (more thorough but slower)
+            test_mode: Test mode - "both", "read-only", or "write-only"
         """
         self.test_images_folder = Path(test_images_folder)
         self.regular_folder = Path(regular_folder)
@@ -74,6 +83,11 @@ class CriticalFUSEPerformanceTester:
         self.simulate_display = simulate_display
         self.enable_cache_flush = enable_cache_flush
         self.aggressive_cache_flush = aggressive_cache_flush
+        self.test_mode = test_mode.lower()
+        
+        # Validate test mode
+        if self.test_mode not in ["both", "read-only", "write-only"]:
+            raise ValueError(f"Invalid test_mode: {test_mode}. Must be 'both', 'read-only', or 'write-only'")
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -490,26 +504,37 @@ class CriticalFUSEPerformanceTester:
             print(f"Processing {i}/{len(jpeg_files)}: {jpeg_file.name}")
             
             try:
-                # Measure write time (copy file to test folder with open/close)
                 dest_path = folder_path / jpeg_file.name
-                write_time, write_size = self.measure_file_operation(
-                    self.write_file_with_open_close, jpeg_file, dest_path
-                )
+                write_time, write_size = 0, 0
+                read_time, read_size = 0, 0
                 
-                # For regular filesystem tests, flush the file from cache before reading
-                # to ensure accurate performance measurements
-                if folder_type == "Regular Filesystem" and self.enable_cache_flush:
-                    print(f"    Flushing {dest_path.name} from cache...")
-                    cache_flushed = self.flush_file_from_cache(dest_path)
-                    if cache_flushed:
-                        print(f"    Successfully flushed {dest_path.name} from cache")
-                    else:
-                        print(f"    Warning: Could not flush {dest_path.name} from cache")
+                # Perform write test if not read-only mode
+                if self.test_mode != "read-only":
+                    # Measure write time (copy file to test folder with open/close)
+                    write_time, write_size = self.measure_file_operation(
+                        self.write_file_with_open_close, jpeg_file, dest_path
+                    )
                 
-                # Measure read time (read the copied file with open/close)
-                read_time, read_size = self.measure_file_operation(
-                    self.read_file_with_open_close, dest_path
-                )
+                # Perform read test if not write-only mode
+                if self.test_mode != "write-only":
+                    # For read-only mode, read directly from source file
+                    # For other modes, read from the copied file
+                    read_source_path = jpeg_file if self.test_mode == "read-only" else dest_path
+                    
+                    # For regular filesystem tests, flush the file from cache before reading
+                    # to ensure accurate performance measurements
+                    if folder_type == "Regular Filesystem" and self.enable_cache_flush:
+                        print(f"    Flushing {read_source_path.name} from cache...")
+                        cache_flushed = self.flush_file_from_cache(read_source_path)
+                        if cache_flushed:
+                            print(f"    Successfully flushed {read_source_path.name} from cache")
+                        else:
+                            print(f"    Warning: Could not flush {read_source_path.name} from cache")
+                    
+                    # Measure read time (read the file with open/close)
+                    read_time, read_size = self.measure_file_operation(
+                        self.read_file_with_open_close, read_source_path
+                    )
                 
                 file_result = {
                     'filename': jpeg_file.name,
@@ -527,8 +552,14 @@ class CriticalFUSEPerformanceTester:
                 total_read_time += read_time
                 total_size += write_size
                 
-                print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
-                print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
+                # Print results based on test mode
+                if self.test_mode == "write-only":
+                    print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
+                elif self.test_mode == "read-only":
+                    print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
+                else:  # both
+                    print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
+                    print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
                 
             except Exception as e:
                 print(f"  Error processing {jpeg_file.name}: {e}")
@@ -538,29 +569,39 @@ class CriticalFUSEPerformanceTester:
                     
                     # For FUSE filesystems, try creating the file first
                     dest_path = folder_path / jpeg_file.name
+                    write_time, write_size = 0, 0
+                    read_time, read_size = 0, 0
                     
                     # Create empty file first
                     dest_path.touch(exist_ok=True)
                     
-                    # Then write data
-                    write_time, write_size = self.measure_file_operation(
-                        self.write_file_with_open_close, jpeg_file, dest_path
-                    )
+                    # Perform write test if not read-only mode
+                    if self.test_mode != "read-only":
+                        # Then write data
+                        write_time, write_size = self.measure_file_operation(
+                            self.write_file_with_open_close, jpeg_file, dest_path
+                        )
                     
-                    # For regular filesystem tests, flush the file from cache before reading
-                    # to ensure accurate performance measurements
-                    if folder_type == "Regular Filesystem" and self.enable_cache_flush:
-                        print(f"    Flushing {dest_path.name} from cache (alternative approach)...")
-                        cache_flushed = self.flush_file_from_cache(dest_path)
-                        if cache_flushed:
-                            print(f"    Successfully flushed {dest_path.name} from cache")
-                        else:
-                            print(f"    Warning: Could not flush {dest_path.name} from cache")
-                    
-                    # Read data
-                    read_time, read_size = self.measure_file_operation(
-                        self.read_file_with_open_close, dest_path
-                    )
+                    # Perform read test if not write-only mode
+                    if self.test_mode != "write-only":
+                        # For read-only mode, read directly from source file
+                        # For other modes, read from the copied file
+                        read_source_path = jpeg_file if self.test_mode == "read-only" else dest_path
+                        
+                        # For regular filesystem tests, flush the file from cache before reading
+                        # to ensure accurate performance measurements
+                        if folder_type == "Regular Filesystem" and self.enable_cache_flush:
+                            print(f"    Flushing {read_source_path.name} from cache (alternative approach)...")
+                            cache_flushed = self.flush_file_from_cache(read_source_path)
+                            if cache_flushed:
+                                print(f"    Successfully flushed {read_source_path.name} from cache")
+                            else:
+                                print(f"    Warning: Could not flush {read_source_path.name} from cache")
+                        
+                        # Read data
+                        read_time, read_size = self.measure_file_operation(
+                            self.read_file_with_open_close, read_source_path
+                        )
                     
                     file_result = {
                         'filename': jpeg_file.name,
@@ -578,8 +619,14 @@ class CriticalFUSEPerformanceTester:
                     total_read_time += read_time
                     total_size += write_size
                     
-                    print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
-                    print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
+                    # Print results based on test mode
+                    if self.test_mode == "write-only":
+                        print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
+                    elif self.test_mode == "read-only":
+                        print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
+                    else:  # both
+                        print(f"  Write: {write_time:.4f}s ({file_result['write_speed_mbps']:.2f} MB/s)")
+                        print(f"  Read:  {read_time:.4f}s ({file_result['read_speed_mbps']:.2f} MB/s)")
                     
                 except Exception as e2:
                     print(f"  Alternative approach also failed: {e2}")
@@ -599,10 +646,18 @@ class CriticalFUSEPerformanceTester:
             print(f"\n{folder_type} Summary:")
             print(f"  Total files: {test_results['summary']['total_files']}")
             print(f"  Total size: {test_results['summary']['total_size_mb']:.2f} MB")
-            print(f"  Total write time: {total_write_time:.4f}s")
-            print(f"  Total read time: {total_read_time:.4f}s")
-            print(f"  Avg write speed: {test_results['summary']['avg_write_speed_mbps']:.2f} MB/s")
-            print(f"  Avg read speed: {test_results['summary']['avg_read_speed_mbps']:.2f} MB/s")
+            
+            if self.test_mode == "write-only":
+                print(f"  Total write time: {total_write_time:.4f}s")
+                print(f"  Avg write speed: {test_results['summary']['avg_write_speed_mbps']:.2f} MB/s")
+            elif self.test_mode == "read-only":
+                print(f"  Total read time: {total_read_time:.4f}s")
+                print(f"  Avg read speed: {test_results['summary']['avg_read_speed_mbps']:.2f} MB/s")
+            else:  # both
+                print(f"  Total write time: {total_write_time:.4f}s")
+                print(f"  Total read time: {total_read_time:.4f}s")
+                print(f"  Avg write speed: {test_results['summary']['avg_write_speed_mbps']:.2f} MB/s")
+                print(f"  Avg read speed: {test_results['summary']['avg_read_speed_mbps']:.2f} MB/s")
         
         return test_results
     
@@ -861,6 +916,7 @@ class CriticalFUSEPerformanceTester:
         print(f"Cache flushing: {'Enabled' if self.enable_cache_flush else 'Disabled'}")
         if self.enable_cache_flush:
             print(f"Aggressive cache flushing: {'Enabled' if self.aggressive_cache_flush else 'Disabled'}")
+        print(f"Test mode: {self.test_mode.title()}")
         
         # Check if we're on Linux for cache flushing
         if self.enable_cache_flush and platform.system().lower() != "linux":
@@ -927,8 +983,23 @@ def main():
     parser.add_argument('--no-display', action='store_true', help='Skip file display simulation during read operations')
     parser.add_argument('--no-cache-flush', action='store_true', help='Skip flushing files from cache during regular filesystem tests')
     parser.add_argument('--no-aggressive-cache-flush', action='store_true', help='Disable aggressive cache flushing (use standard cache flushing instead)')
+    parser.add_argument('--read-only', action='store_true', help='Run only read performance tests')
+    parser.add_argument('--write-only', action='store_true', help='Run only write performance tests')
     
     args = parser.parse_args()
+    
+    # Validate test mode arguments
+    if args.read_only and args.write_only:
+        print("Error: Cannot specify both --read-only and --write-only!")
+        return 1
+    
+    # Determine test mode
+    if args.read_only:
+        test_mode = "read-only"
+    elif args.write_only:
+        test_mode = "write-only"
+    else:
+        test_mode = "both"
     
     # Validate folders
     if not os.path.exists(args.test_images_folder):
@@ -945,7 +1016,7 @@ def main():
     aggressive_cache_flush = not args.no_aggressive_cache_flush
     tester = CriticalFUSEPerformanceTester(args.test_images_folder, args.regular_folder, 
                                           args.mounted_folder, args.output_dir, args.output, 
-                                          simulate_display, enable_cache_flush, aggressive_cache_flush)
+                                          simulate_display, enable_cache_flush, aggressive_cache_flush, test_mode)
     
     try:
         tester.run_tests()
