@@ -9,6 +9,17 @@ comparison graphs showing the performance differences.
 The script includes file display simulation during read operations to measure complete
 read time including display overhead, providing more realistic performance measurements.
 
+For accurate performance comparisons, the script automatically flushes files from the
+Linux system cache before reading them in regular filesystem tests. This ensures that the
+regular filesystem doesn't benefit from cached data, providing fair comparisons with
+the FUSE filesystem.
+
+Cache flushing is performed using Linux-specific methods:
+- vmtouch: Preferred method for evicting files from cache
+- fincore + dd: Alternative method to check and drop files from cache
+- /proc/sys/vm/drop_caches: System-wide cache drop (requires root)
+- File touch: Fallback method to invalidate cache
+
 Usage:
     python3 jpeg_performance_test.py <test_images_folder> <regular_folder> <mounted_folder> [options]
 
@@ -16,6 +27,7 @@ Examples:
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ --output-dir ./performance_results
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --output results.json
     python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-display
+    python3 jpeg_performance_test.py ../TestImages/ ./regular_test/ ./mnt/ -o ./results --no-cache-flush
 """
 
 import os
@@ -24,6 +36,7 @@ import time
 import glob
 import argparse
 import subprocess
+import platform
 from pathlib import Path
 from typing import List, Dict, Tuple
 import json
@@ -35,7 +48,8 @@ import numpy as np
 
 class CriticalFUSEPerformanceTester:
     def __init__(self, test_images_folder: str, regular_folder: str, mounted_folder: str, 
-                 output_dir: str, output_file: str = None, simulate_display: bool = True):
+                 output_dir: str, output_file: str = None, simulate_display: bool = True, 
+                 enable_cache_flush: bool = True):
         """
         Initialize the performance tester.
         
@@ -46,6 +60,7 @@ class CriticalFUSEPerformanceTester:
             output_dir: Path to output directory for results
             output_file: Optional path to save results JSON
             simulate_display: Whether to simulate file display operations during read
+            enable_cache_flush: Whether to flush files from cache during regular filesystem tests
         """
         self.test_images_folder = Path(test_images_folder)
         self.regular_folder = Path(regular_folder)
@@ -53,6 +68,7 @@ class CriticalFUSEPerformanceTester:
         self.output_dir = Path(output_dir)
         self.output_file = output_file
         self.simulate_display = simulate_display
+        self.enable_cache_flush = enable_cache_flush
         
         # Create separate graphs directory
         self.graphs_dir = self.output_dir.parent / f"{self.output_dir.name}_graphs"
@@ -75,6 +91,110 @@ class CriticalFUSEPerformanceTester:
         # Verify mounted folder exists
         if not self.mounted_folder.exists():
             raise FileNotFoundError(f"Mounted folder not found: {self.mounted_folder}")
+    
+    def flush_file_from_cache(self, file_path: Path) -> bool:
+        """
+        Flush a specific file from the Linux system cache.
+        
+        Args:
+            file_path: Path to the file to flush from cache
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Check if we're on Linux
+            if platform.system().lower() != "linux":
+                print(f"    Warning: Cache flushing only supported on Linux")
+                return False
+            
+            # Method 1: Use vmtouch to evict from cache (preferred)
+            try:
+                result = subprocess.run(['vmtouch', '-e', str(file_path)], 
+                                     capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+            
+            # Method 2: Use fincore to check if file is in cache, then drop it
+            try:
+                # Check if file is in cache
+                result = subprocess.run(['fincore', str(file_path)], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and 'pages' in result.stdout:
+                    # Drop the file from cache using dd
+                    subprocess.run(['dd', 'if=/dev/zero', f'of={file_path}', 'bs=1', 'count=0', 'conv=notrunc'], 
+                                 capture_output=True, timeout=5)
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+            
+            # Method 3: Use sync and drop_caches (requires root, but more thorough)
+            try:
+                # Sync filesystem
+                subprocess.run(['sync'], capture_output=True, timeout=5)
+                # Drop page cache (requires root or specific permissions)
+                with open('/proc/sys/vm/drop_caches', 'w') as f:
+                    f.write('1')  # Drop page cache
+                return True
+            except (PermissionError, FileNotFoundError):
+                pass
+            
+            # Method 4: Fallback - try to invalidate cache by touching the file
+            try:
+                file_path.touch()
+                return True
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"    Warning: Could not flush cache for {file_path.name}: {e}")
+            
+        return False
+    
+    def flush_directory_from_cache(self, directory_path: Path) -> int:
+        """
+        Flush all files in a directory from the Linux system cache.
+        
+        Args:
+            directory_path: Path to the directory to flush from cache
+            
+        Returns:
+            Number of files successfully flushed from cache
+        """
+        flushed_count = 0
+        
+        try:
+            # Check if we're on Linux
+            if platform.system().lower() != "linux":
+                print(f"    Warning: Cache flushing only supported on Linux")
+                return 0
+                
+            if not directory_path.exists():
+                return 0
+            
+            # Try system-wide cache drop first (most efficient for directories)
+            try:
+                subprocess.run(['sync'], capture_output=True, timeout=5)
+                with open('/proc/sys/vm/drop_caches', 'w') as f:
+                    f.write('1')  # Drop page cache
+                print(f"    System-wide cache drop successful")
+                return 1  # Return 1 to indicate success
+            except (PermissionError, FileNotFoundError):
+                pass
+            
+            # Fallback: flush individual files
+            files = [f for f in directory_path.iterdir() if f.is_file()]
+            
+            for file_path in files:
+                if self.flush_file_from_cache(file_path):
+                    flushed_count += 1
+                    
+        except Exception as e:
+            print(f"    Warning: Could not flush directory cache: {e}")
+            
+        return flushed_count
     
     def find_jpeg_files(self) -> List[Path]:
         """Find all JPEG files in the test images folder."""
@@ -227,6 +347,16 @@ class CriticalFUSEPerformanceTester:
                     self.write_file_with_open_close, jpeg_file, dest_path
                 )
                 
+                # For regular filesystem tests, flush the file from cache before reading
+                # to ensure accurate performance measurements
+                if folder_type == "Regular Filesystem" and self.enable_cache_flush:
+                    print(f"    Flushing {dest_path.name} from cache...")
+                    cache_flushed = self.flush_file_from_cache(dest_path)
+                    if cache_flushed:
+                        print(f"    Successfully flushed {dest_path.name} from cache")
+                    else:
+                        print(f"    Warning: Could not flush {dest_path.name} from cache")
+                
                 # Measure read time (read the copied file with open/close)
                 read_time, read_size = self.measure_file_operation(
                     self.read_file_with_open_close, dest_path
@@ -267,6 +397,16 @@ class CriticalFUSEPerformanceTester:
                     write_time, write_size = self.measure_file_operation(
                         self.write_file_with_open_close, jpeg_file, dest_path
                     )
+                    
+                    # For regular filesystem tests, flush the file from cache before reading
+                    # to ensure accurate performance measurements
+                    if folder_type == "Regular Filesystem" and self.enable_cache_flush:
+                        print(f"    Flushing {dest_path.name} from cache (alternative approach)...")
+                        cache_flushed = self.flush_file_from_cache(dest_path)
+                        if cache_flushed:
+                            print(f"    Successfully flushed {dest_path.name} from cache")
+                        else:
+                            print(f"    Warning: Could not flush {dest_path.name} from cache")
                     
                     # Read data
                     read_time, read_size = self.measure_file_operation(
@@ -569,6 +709,12 @@ class CriticalFUSEPerformanceTester:
         print(f"Regular folder: {self.regular_folder}")
         print(f"Mounted folder: {self.mounted_folder}")
         print(f"Display simulation: {'Enabled' if self.simulate_display else 'Disabled'}")
+        print(f"Cache flushing: {'Enabled' if self.enable_cache_flush else 'Disabled'}")
+        
+        # Check if we're on Linux for cache flushing
+        if self.enable_cache_flush and platform.system().lower() != "linux":
+            print("WARNING: Cache flushing is only supported on Linux systems!")
+            print("Performance comparisons may not be accurate due to cached data.")
         
         # Find JPEG files
         jpeg_files = self.find_jpeg_files()
@@ -578,6 +724,13 @@ class CriticalFUSEPerformanceTester:
             return
         
         # Test regular folder performance
+        if self.enable_cache_flush:
+            print("\n=== Flushing Regular Filesystem Cache ===")
+            flushed_count = self.flush_directory_from_cache(self.regular_folder)
+            print(f"Flushed {flushed_count} files from regular filesystem cache")
+        else:
+            print("\n=== Cache Flushing Disabled ===")
+        
         regular_results = self.test_folder_performance(self.regular_folder, jpeg_files, "Regular Filesystem")
         if regular_results:
             self.results['tests'].append(regular_results)
@@ -610,6 +763,7 @@ def main():
     parser.add_argument('--output', help='Output JSON file for results')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup after testing')
     parser.add_argument('--no-display', action='store_true', help='Skip file display simulation during read operations')
+    parser.add_argument('--no-cache-flush', action='store_true', help='Skip flushing files from cache during regular filesystem tests')
     
     args = parser.parse_args()
     
@@ -624,8 +778,10 @@ def main():
     
     # Create tester and run tests
     simulate_display = not args.no_display
+    enable_cache_flush = not args.no_cache_flush
     tester = CriticalFUSEPerformanceTester(args.test_images_folder, args.regular_folder, 
-                                          args.mounted_folder, args.output_dir, args.output, simulate_display)
+                                          args.mounted_folder, args.output_dir, args.output, 
+                                          simulate_display, enable_cache_flush)
     
     try:
         tester.run_tests()
