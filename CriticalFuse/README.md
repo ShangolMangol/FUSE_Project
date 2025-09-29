@@ -93,8 +93,8 @@ Collection of test images for validation and performance testing.
 # Build the project
 make
 
-# Mount the filesystem
-./CriticalFUSE -f ./mnt
+# Mount the filesystem (add flag -f for foreground running)
+./CriticalFUSE ./mnt
 
 # Run tests
 make test
