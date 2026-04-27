@@ -1,5 +1,18 @@
 # FUSE Project
 
+Filesystem in Userspace (FUSE) file system prototype for separating file data according to error tolerance.
+
+### Motivation
+Modern storage systems often assume that all data must be stored with perfect accuracy. However, this “all-or-nothing” correctness model comes with significant costs in performance, energy, storage overhead, and system complexity. 
+Approximate storage offers an alternative by allowing controlled reductions in data accuracy (e.g., tolerating small bit flips).
+In return, it can improve performance, increase storage lifetime, and reduce overhead. Flash-based storage devices like SSDs are well-suited for this kind of tradeoff.
+
+This idea becomes more relevant when considering that within a single file, not all data is equally important—some parts can tolerate small levels of corruption without significantly affecting usability.
+
+To utilize this trait, file data is separated into critical and non-critical sections based on error tolerance. CriticalFuse achieves this by using specialized file handlers for different file types, which analyze and partition file data accordingly. The filesystem stores these sections separately, ensuring that critical data remains intact while allowing controlled degradation in non-critical data. Metadata is maintained to manage the relationship between the two sections, enabling seamless reconstruction of the original file during access.
+
+
+
 ## Table of Contents
 - [Installation Guide](#installation-guide)
 - [Supported File Types](#supported-file-types)
